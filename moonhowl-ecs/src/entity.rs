@@ -20,7 +20,7 @@ impl Entity {
         self.components.contains_key(&TypeId::of::<T>())
     }
 
-    pub fn has_registered_component<T: IComponent>(&self, id: &usize) -> bool {
+    pub fn has_registered_component<T: IComponent>(&self, id: usize) -> bool {
         if !self.has_component::<T>() {
             return false;
         }
@@ -38,13 +38,13 @@ impl Entity {
             .and_then(|component| (**component).as_any().downcast_ref::<T>())
     }
 
-    pub fn get_registered_component<T: IComponent>(&mut self, id: &usize) -> Option<&T> {
+    pub fn get_registered_component<T: IComponent>(&mut self, id: usize) -> Option<&T> {
         if !self.has_component::<T>() {
             return None;
         }
 
         if let Some(registered_component) = self.registered_components.get_mut(&TypeId::of::<T>()) {
-            registered_component.insert(*id);
+            registered_component.insert(id);
         };
 
         self.get_component::<T>()

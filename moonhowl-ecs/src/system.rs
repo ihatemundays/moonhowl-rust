@@ -14,15 +14,15 @@ impl System {
         COUNTER.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub fn get_id(&self) -> &usize {
-        &self.0
+    pub fn get_id(&self) -> usize {
+        self.0
     }
 
     pub fn has_component<T: IComponent>(&self, entity: &Entity) -> bool {
-        entity.has_registered_component::<T>(&self.0)
+        entity.has_registered_component::<T>(self.0)
     }
 
     pub fn get_component<'a, T: IComponent>(&self, entity: &'a mut Entity) -> Option<&'a T> {
-        entity.get_registered_component::<T>(&self.0)
+        entity.get_registered_component::<T>(self.0)
     }
 }
