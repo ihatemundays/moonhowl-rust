@@ -70,7 +70,10 @@ impl Entity {
     where
         F: FnOnce(&Entity) -> bool,
     {
-        EntityCheck(predicate(&self))
+        match predicate(&self) {
+            true => EntityCheck::Pass,
+            false => EntityCheck::Fail,
+        }
     }
 }
 
@@ -106,21 +109,29 @@ impl<'a> EntitySystem<'a> {
     where
         F: FnOnce(&EntitySystem) -> bool,
     {
-        EntityCheck(predicate(&self))
+        match predicate(&self) {
+            true => EntityCheck::Pass,
+            false => EntityCheck::Fail,
+        }
     }
 }
 
-pub struct EntityCheck(bool);
+pub enum EntityCheck {
+    Pass,
+    Fail,
+}
 
 impl EntityCheck {
     pub fn and_then<F>(&self, callback: F) -> &Self
     where
         F: FnOnce(),
     {
-        if self.0 {
-            callback();
+        match self {
+            EntityCheck::Pass => {
+                callback();
+                self
+            },
+            EntityCheck::Fail => self,
         }
-
-        self
     }
 }
