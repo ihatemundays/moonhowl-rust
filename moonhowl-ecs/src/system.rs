@@ -34,11 +34,11 @@ impl System {
         entity.has_unread_component::<T>(self.0)
     }
 
-    pub fn get_component<T: IComponent>(&self, entity: &Entity) -> Option<&T> {
+    pub fn get_component<'a, T: IComponent>(&self, entity: &'a Entity) -> Option<&'a T> {
         entity.get_component::<T>(self.0)
     }
 
-    pub fn check<F>(&self, predicate: F) -> SystemCheck
+    pub fn check<F>(&self, predicate: F) -> SystemCheck<'_>
     where
         F: FnOnce(&System) -> bool,
     {
@@ -49,12 +49,12 @@ impl System {
     }
 }
 
-pub enum SystemCheck {
-    Pass(&System),
+pub enum SystemCheck<'a> {
+    Pass(&'a System),
     Fail,
 }
 
-impl SystemCheck {
+impl<'a> SystemCheck<'a> {
     pub fn and_then<F>(&self, callback: F) -> &Self
     where
         F: FnOnce(&System),
