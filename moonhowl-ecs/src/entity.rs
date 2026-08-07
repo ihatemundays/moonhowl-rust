@@ -51,7 +51,7 @@ impl Entity {
             .and_then(|component| (**component).as_any().downcast_ref::<T>())
     }
 
-    pub fn insert_component<T: IComponent>(&mut self, component: T) -> &mut Self {
+    pub fn set_component<T: IComponent>(&mut self, component: T) -> &mut Self {
         let boxed_component = Box::new(component);
         self.components.insert(TypeId::of::<T>(), boxed_component);
         self.read_by
@@ -61,7 +61,7 @@ impl Entity {
         self
     }
 
-    pub fn remove_component<T: IComponent>(&mut self) -> &mut Self {
+    pub fn unset_component<T: IComponent>(&mut self) -> &mut Self {
         self.components.remove(&TypeId::of::<T>());
         self.read_by.get_mut().remove(&TypeId::of::<T>());
 
