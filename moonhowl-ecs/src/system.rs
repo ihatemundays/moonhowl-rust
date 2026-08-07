@@ -34,7 +34,37 @@ impl System {
         entity.has_unread_component::<T>(self.0)
     }
 
-    pub fn get_component<'a, T: IComponent>(&self, entity: &'a Entity) -> Option<&'a T> {
+    pub fn get_component<T: IComponent>(&self, entity: &Entity) -> Option<&T> {
         entity.get_component::<T>(self.0)
+    }
+
+    pub fn check<F>(&self, predicate: F) -> SystemCheck
+    where
+        F: FnOnce(&System) -> bool,
+    {
+        match predicate(&self) {
+            true => SystemCheck::Pass(&self),
+            false => SystemCheck::Fail,
+        }
+    }
+}
+
+pub enum SystemCheck {
+    Pass(&System),
+    Fail,
+}
+
+impl SystemCheck {
+    pub fn and_then<F>(&self, callback: F) -> &Self
+    where
+        F: FnOnce(&System),
+    {
+        match self {
+            SystemCheck::Pass(system) => {
+                callback(system);
+                self
+            },
+            SystemCheck::Fail => self,
+        }
     }
 }

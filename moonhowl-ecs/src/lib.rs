@@ -3,5 +3,5 @@ mod entity;
 mod system;
 
 pub use component::IComponent;
-pub use entity::{Entity, EntitySystem};
-pub use system::System;
+pub use entity::Entity;
+pub use system::{System, SystemCheck};

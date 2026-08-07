@@ -1,5 +1,4 @@
 use crate::component::IComponent;
-use crate::system::System;
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -67,73 +66,5 @@ impl Entity {
         self.read_by.get_mut().remove(&TypeId::of::<T>());
 
         self
-    }
-
-    pub fn check<F>(&self, predicate: F) -> EntityCheck
-    where
-        F: FnOnce(&Entity) -> bool,
-    {
-        match predicate(&self) {
-            true => EntityCheck::Pass,
-            false => EntityCheck::Fail,
-        }
-    }
-}
-
-pub struct EntitySystem<'a>(&'a Entity, &'a System);
-
-impl<'a> EntitySystem<'a> {
-    pub fn new(entity: &'a Entity, system: &'a System) -> Self {
-        Self(entity, system)
-    }
-
-    pub fn has_component<T: IComponent>(&self) -> bool {
-        self.0.has_component::<T>()
-    }
-
-    pub fn is_component_read<T: IComponent>(&self) -> bool {
-        self.0.is_component_read::<T>(self.1.get_id())
-    }
-
-    pub fn has_read_component<T: IComponent>(&self) -> bool {
-        self.0.has_read_component::<T>(self.1.get_id())
-    }
-
-    pub fn has_unread_component<T: IComponent>(&self) -> bool {
-        self.0.has_unread_component::<T>(self.1.get_id())
-    }
-
-    pub fn get_component<T: IComponent>(&self) -> Option<&T> {
-        self.0.get_component::<T>(self.1.get_id())
-    }
-
-    pub fn check<F>(&self, predicate: F) -> EntityCheck
-    where
-        F: FnOnce(&EntitySystem) -> bool,
-    {
-        match predicate(&self) {
-            true => EntityCheck::Pass,
-            false => EntityCheck::Fail,
-        }
-    }
-}
-
-pub enum EntityCheck {
-    Pass,
-    Fail,
-}
-
-impl EntityCheck {
-    pub fn and_then<F>(&self, callback: F) -> &Self
-    where
-        F: FnOnce(),
-    {
-        match self {
-            EntityCheck::Pass => {
-                callback();
-                self
-            },
-            EntityCheck::Fail => self,
-        }
     }
 }
