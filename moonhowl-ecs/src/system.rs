@@ -35,8 +35,12 @@ impl System {
         entity.has_unread_component::<T>(self.0)
     }
 
+    pub fn read_component<'a, T: IComponent>(&self, entity: &'a Entity) -> Option<&'a T> {
+        entity.read_component::<T>(self.0)
+    }
+
     pub fn get_component<'a, T: IComponent>(&self, entity: &'a Entity) -> Option<&'a T> {
-        entity.get_component::<T>(self.0)
+        entity.get_component()
     }
     
     pub fn has_some_components<T: ComponentSet>(&self, entity: &Entity) -> bool {

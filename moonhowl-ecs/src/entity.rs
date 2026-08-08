@@ -1,5 +1,5 @@
 use crate::component::IComponent;
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,6 +8,7 @@ pub struct Entity {
     id: usize,
     components: HashMap<TypeId, Box<dyn IComponent>>,
     read_by: Mutex<HashMap<TypeId, HashSet<usize>>>,
+    context: Option<Box<dyn Any + Send>>,
 }
 
 impl Entity {
@@ -16,6 +17,7 @@ impl Entity {
             id: Self::get_new_id(),
             components: HashMap::new(),
             read_by: Mutex::new(HashMap::new()),
+            context: None,
         }
     }
 
@@ -48,7 +50,7 @@ impl Entity {
         self.has_component::<T>() && !self.is_component_read::<T>(system_id)
     }
 
-    pub fn get_component<T: IComponent>(&self, system_id: usize) -> Option<&T> {
+    pub fn read_component<T: IComponent>(&self, system_id: usize) -> Option<&T> {
         if !self.has_component::<T>() {
             return None;
         }
@@ -59,6 +61,16 @@ impl Entity {
             .entry(TypeId::of::<T>())
             .or_default()
             .insert(system_id);
+
+        self.components
+            .get(&TypeId::of::<T>())
+            .and_then(|component| (**component).as_any().downcast_ref::<T>())
+    }
+
+    pub fn get_component<T: IComponent>(&self) -> Option<&T> {
+        if !self.has_component::<T>() {
+            return None;
+        }
 
         self.components
             .get(&TypeId::of::<T>())
@@ -80,6 +92,33 @@ impl Entity {
         self.components.remove(&TypeId::of::<T>());
         self.read_by.get_mut().unwrap().remove(&TypeId::of::<T>());
 
+        self
+    }
+
+    /// Associates `context` with this entity — e.g. a handle back to
+    /// whatever it has a 1:1 relationship with (a `Player` node, say), for
+    /// systems to reach during `run`. Only one context value is stored at a
+    /// time; setting a new one replaces the old.
+    ///
+    /// Bounded by `Send`, not `Sync`: `World::run` moves each entity into
+    /// the one thread that runs systems against it, and nothing else ever
+    /// touches that entity concurrently, so the context never needs to be
+    /// shared across threads — only sent into the one it ends up on.
+    pub fn set_context<C: Any + Send>(&mut self, context: C) -> &mut Self {
+        self.context = Some(Box::new(context));
+        self
+    }
+
+    pub fn context<C: Any + Send>(&self) -> Option<&C> {
+        self.context.as_deref()?.downcast_ref::<C>()
+    }
+
+    pub fn context_mut<C: Any + Send>(&mut self) -> Option<&mut C> {
+        self.context.as_deref_mut()?.downcast_mut::<C>()
+    }
+
+    pub fn clear_context(&mut self) -> &mut Self {
+        self.context = None;
         self
     }
 
