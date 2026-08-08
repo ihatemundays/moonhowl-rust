@@ -70,5 +70,5 @@ impl System {
 
 pub trait ISystem: Send + Sync {
     fn check(&self, system: &System, entity: &Entity) -> bool;
-    fn and_then(&self, system: &System, entity: &mut Entity);
+    fn and_then(&self, system: &System, entity: &Entity);
 }
