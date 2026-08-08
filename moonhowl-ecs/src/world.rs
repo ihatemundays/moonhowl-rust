@@ -74,12 +74,11 @@ impl World {
             for entity in entities.values_mut() {
                 let systems = &*systems;
                 scope.spawn(move || {
-                    let passed: Vec<&(System, Box<dyn ISystem>)> = systems
-                        .iter()
-                        .filter(|(system, system_impl)| {
-                            system_impl.check(&CheckContext::new(system), entity)
-                        })
-                        .collect();
+                    let mut passed: Vec<&(System, Box<dyn ISystem>)> =
+                        Vec::with_capacity(systems.len());
+                    passed.extend(systems.iter().filter(|(system, system_impl)| {
+                        system_impl.check(&CheckContext::new(system), entity)
+                    }));
 
                     for (system, system_impl) in passed {
                         system_impl.and_then(&ActionContext::new(system), entity);

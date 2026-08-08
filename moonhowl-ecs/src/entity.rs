@@ -5,10 +5,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// A component plus the set of systems that have read it, kept together so
+/// the two can never drift out of sync the way two parallel maps could, and
+/// so a lookup by `TypeId` only has to happen once.
+struct ComponentEntry {
+    component: Box<dyn IComponent>,
+    read_by: Mutex<HashSet<usize>>,
+}
+
 pub struct Entity {
     id: usize,
-    components: HashMap<TypeId, Box<dyn IComponent>>,
-    read_by: Mutex<HashMap<TypeId, HashSet<usize>>>,
+    components: HashMap<TypeId, ComponentEntry>,
     context: Option<Box<dyn Any + Send>>,
 }
 
@@ -17,7 +24,6 @@ impl Entity {
         Self {
             id: Self::get_new_id(),
             components: HashMap::new(),
-            read_by: Mutex::new(HashMap::new()),
             context: None,
         }
     }
@@ -44,15 +50,16 @@ impl Entity {
     }
 
     fn is_component_read<T: IComponent>(&self, system_id: usize) -> bool {
-        self.read_by
-            .lock()
-            .unwrap()
+        self.components
             .get(&TypeId::of::<T>())
-            .is_some_and(|readers| readers.contains(&system_id))
+            .is_some_and(|entry| entry.read_by.lock().unwrap().contains(&system_id))
     }
 
     fn has_read_component<T: IComponent>(&self, system_id: usize) -> bool {
-        self.has_component::<T>() && self.is_component_read::<T>(system_id)
+        // is_component_read already reads false for an absent component
+        // (no entry, no read set), so the has_component check that used to
+        // gate this is redundant.
+        self.is_component_read::<T>(system_id)
     }
 
     fn has_some_read_components<T: ComponentSet>(&self, system_id: usize) -> bool {
@@ -64,7 +71,9 @@ impl Entity {
     }
 
     fn has_unread_component<T: IComponent>(&self, system_id: usize) -> bool {
-        self.has_component::<T>() && !self.is_component_read::<T>(system_id)
+        self.components
+            .get(&TypeId::of::<T>())
+            .is_some_and(|entry| !entry.read_by.lock().unwrap().contains(&system_id))
     }
 
     fn has_some_unread_components<T: ComponentSet>(&self, system_id: usize) -> bool {
@@ -76,20 +85,14 @@ impl Entity {
     }
 
     fn read_component<T: IComponent>(&self, system_id: usize) -> Option<&T> {
-        if !self.has_component::<T>() {
-            return None;
+        let entry = self.components.get(&TypeId::of::<T>())?;
+        let component = entry.component.as_any().downcast_ref::<T>();
+
+        if component.is_some() {
+            entry.read_by.lock().unwrap().insert(system_id);
         }
 
-        self.read_by
-            .lock()
-            .unwrap()
-            .entry(TypeId::of::<T>())
-            .or_default()
-            .insert(system_id);
-
-        self.components
-            .get(&TypeId::of::<T>())
-            .and_then(|component| (**component).as_any().downcast_ref::<T>())
+        component
     }
 
     fn read_components<T: ComponentSet>(&self, system_id: usize) -> Option<T::Refs<'_>> {
@@ -97,13 +100,9 @@ impl Entity {
     }
 
     pub fn get_component<T: IComponent>(&self) -> Option<&T> {
-        if !self.has_component::<T>() {
-            return None;
-        }
-
         self.components
             .get(&TypeId::of::<T>())
-            .and_then(|component| (**component).as_any().downcast_ref::<T>())
+            .and_then(|entry| entry.component.as_any().downcast_ref::<T>())
     }
 
     pub fn get_components<T: ComponentSet>(&self) -> Option<T::Refs<'_>> {
@@ -111,18 +110,18 @@ impl Entity {
     }
 
     pub fn set_component<T: IComponent>(&mut self, component: T) -> &mut Self {
-        let boxed_component = Box::new(component);
-        self.components.insert(TypeId::of::<T>(), boxed_component);
-        self.read_by
-            .get_mut()
-            .unwrap()
-            .insert(TypeId::of::<T>(), HashSet::new());
+        self.components.insert(
+            TypeId::of::<T>(),
+            ComponentEntry {
+                component: Box::new(component),
+                read_by: Mutex::new(HashSet::new()),
+            },
+        );
         self
     }
 
     pub fn unset_component<T: IComponent>(&mut self) -> &mut Self {
         self.components.remove(&TypeId::of::<T>());
-        self.read_by.get_mut().unwrap().remove(&TypeId::of::<T>());
         self
     }
 
