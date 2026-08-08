@@ -1,4 +1,5 @@
-use moonhowl_ecs::{ActionContext, CheckContext, Entity, IComponent, ISystem, World};
+use moonhowl_ecs::{ActionContext, CheckContext, EntityCore, IComponent, IEntity, ISystem, World};
+use moonhowl_macros::{ecs_component, ecs_entity};
 use std::any::Any;
 
 struct Position {
@@ -12,26 +13,24 @@ impl IComponent for Position {
     }
 }
 
+#[ecs_component]
 struct Velocity {
     dx: f32,
     dy: f32,
 }
 
-impl IComponent for Velocity {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+#[ecs_entity]
+struct MovingThing {}
 
 struct MovementLogger;
 
-impl ISystem for MovementLogger {
-    fn check(&self, system: &CheckContext, entity: &Entity) -> bool {
-        system.has_every_unread_component::<(Position, Velocity)>(entity)
+impl ISystem<MovingThing> for MovementLogger {
+    fn check(&self, system: &CheckContext, entity: &MovingThing) -> bool {
+        system.has_every_unread_component::<(Position, Velocity), _>(entity)
     }
 
-    fn and_then(&self, system: &ActionContext, entity: &Entity) {
-        let Some((position, velocity)) = system.read_components::<(Position, Velocity)>(entity)
+    fn and_then(&self, system: &ActionContext, entity: &MovingThing) {
+        let Some((position, velocity)) = system.read_components::<(Position, Velocity), _>(entity)
         else {
             return;
         };
@@ -50,20 +49,24 @@ impl ISystem for MovementLogger {
 fn main() {
     let mut world = World::new();
 
-    let moving = world.spawn();
-    world
-        .get_entity_mut(moving)
-        .unwrap()
+    let mut moving = MovingThing {
+        entity_core: EntityCore::new(),
+    };
+    moving
+        .entity_core
         .set_component(Position { x: 0.0, y: 0.0 })
         .set_component(Velocity { dx: 1.0, dy: 0.5 });
+    world.spawn(moving);
 
-    let stationary = world.spawn();
-    world
-        .get_entity_mut(stationary)
-        .unwrap()
+    let mut stationary = MovingThing {
+        entity_core: EntityCore::new(),
+    };
+    stationary
+        .entity_core
         .set_component(Position { x: 5.0, y: 5.0 });
+    world.spawn(stationary);
 
-    world.register_system(MovementLogger);
+    world.register_system::<MovingThing, _>(MovementLogger);
 
     // stationary is skipped: it has no Velocity, so MovementLogger::check
     // never passes for it.

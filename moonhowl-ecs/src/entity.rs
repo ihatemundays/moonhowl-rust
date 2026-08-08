@@ -1,25 +1,21 @@
 use crate::component::IComponent;
-use crate::system::System;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A component plus the set of systems that have read it, kept together so
-/// the two can never drift out of sync the way two parallel maps could, and
-/// so a lookup by `TypeId` only has to happen once.
 struct ComponentEntry {
     component: Box<dyn IComponent>,
-    read_by: Mutex<HashSet<usize>>,
+    read_by: Mutex<HashSet<TypeId>>,
 }
 
-pub struct Entity {
+pub struct EntityCore {
     id: usize,
     components: HashMap<TypeId, ComponentEntry>,
     context: Option<Box<dyn Any + Send>>,
 }
 
-impl Entity {
+impl EntityCore {
     pub fn new() -> Self {
         Self {
             id: Self::get_new_id(),
@@ -49,42 +45,42 @@ impl Entity {
         T::has_every(self)
     }
 
-    fn is_component_read<T: IComponent>(&self, system_id: usize) -> bool {
+    fn is_component_read<T: IComponent>(&self, system_id: TypeId) -> bool {
         self.components
             .get(&TypeId::of::<T>())
             .is_some_and(|entry| entry.read_by.lock().unwrap().contains(&system_id))
     }
 
-    fn has_read_component<T: IComponent>(&self, system_id: usize) -> bool {
+    fn has_read_component<T: IComponent>(&self, system_id: TypeId) -> bool {
         // is_component_read already reads false for an absent component
         // (no entry, no read set), so the has_component check that used to
         // gate this is redundant.
         self.is_component_read::<T>(system_id)
     }
 
-    fn has_some_read_components<T: ComponentSet>(&self, system_id: usize) -> bool {
+    fn has_some_read_components<T: ComponentSet>(&self, system_id: TypeId) -> bool {
         T::has_some_read(self, system_id)
     }
 
-    fn has_every_read_component<T: ComponentSet>(&self, system_id: usize) -> bool {
+    fn has_every_read_component<T: ComponentSet>(&self, system_id: TypeId) -> bool {
         T::has_every_read(self, system_id)
     }
 
-    fn has_unread_component<T: IComponent>(&self, system_id: usize) -> bool {
+    fn has_unread_component<T: IComponent>(&self, system_id: TypeId) -> bool {
         self.components
             .get(&TypeId::of::<T>())
             .is_some_and(|entry| !entry.read_by.lock().unwrap().contains(&system_id))
     }
 
-    fn has_some_unread_components<T: ComponentSet>(&self, system_id: usize) -> bool {
+    fn has_some_unread_components<T: ComponentSet>(&self, system_id: TypeId) -> bool {
         T::has_some_unread(self, system_id)
     }
 
-    fn has_every_unread_component<T: ComponentSet>(&self, system_id: usize) -> bool {
+    fn has_every_unread_component<T: ComponentSet>(&self, system_id: TypeId) -> bool {
         T::has_every_unread(self, system_id)
     }
 
-    fn read_component<T: IComponent>(&self, system_id: usize) -> Option<&T> {
+    fn read_component<T: IComponent>(&self, system_id: TypeId) -> Option<&T> {
         let entry = self.components.get(&TypeId::of::<T>())?;
         let component = entry.component.as_any().downcast_ref::<T>();
 
@@ -95,7 +91,7 @@ impl Entity {
         component
     }
 
-    fn read_components<T: ComponentSet>(&self, system_id: usize) -> Option<T::Refs<'_>> {
+    fn read_components<T: ComponentSet>(&self, system_id: TypeId) -> Option<T::Refs<'_>> {
         T::read_every(self, system_id)
     }
 
@@ -144,105 +140,123 @@ impl Entity {
     }
 }
 
-pub struct CheckContext<'a>(&'a System);
+pub trait IEntity: Send + 'static {
+    fn core(&self) -> &EntityCore;
+    fn core_mut(&mut self) -> &mut EntityCore;
 
-impl<'a> CheckContext<'a> {
-    pub(crate) fn new(system: &'a System) -> Self {
-        Self(system)
-    }
-
-    pub fn get_id(&self) -> usize {
-        self.0.get_id()
-    }
-
-    pub fn has_component<T: IComponent>(&self, entity: &Entity) -> bool {
-        entity.has_component::<T>()
-    }
-
-    pub fn is_component_read<T: IComponent>(&self, entity: &Entity) -> bool {
-        entity.is_component_read::<T>(self.0.get_id())
-    }
-
-    pub fn has_read_component<T: IComponent>(&self, entity: &Entity) -> bool {
-        entity.has_read_component::<T>(self.0.get_id())
-    }
-
-    pub fn has_unread_component<T: IComponent>(&self, entity: &Entity) -> bool {
-        entity.has_unread_component::<T>(self.0.get_id())
-    }
-
-    pub fn get_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
-        entity.get_component()
-    }
-
-    pub fn get_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
-        entity.get_components::<T>()
-    }
-
-    pub fn has_some_components<T: ComponentSet>(&self, entity: &Entity) -> bool {
-        entity.has_some_components::<T>()
-    }
-
-    pub fn has_every_component<T: ComponentSet>(&self, entity: &Entity) -> bool {
-        entity.has_every_component::<T>()
-    }
-
-    pub fn has_some_read_components<T: ComponentSet>(&self, entity: &Entity) -> bool {
-        entity.has_some_read_components::<T>(self.0.get_id())
-    }
-
-    pub fn has_every_read_component<T: ComponentSet>(&self, entity: &Entity) -> bool {
-        entity.has_every_read_component::<T>(self.0.get_id())
-    }
-
-    pub fn has_some_unread_components<T: ComponentSet>(&self, entity: &Entity) -> bool {
-        entity.has_some_unread_components::<T>(self.0.get_id())
-    }
-
-    pub fn has_every_unread_component<T: ComponentSet>(&self, entity: &Entity) -> bool {
-        entity.has_every_unread_component::<T>(self.0.get_id())
+    fn get_id(&self) -> usize {
+        self.core().get_id()
     }
 }
 
-pub struct ActionContext<'a>(&'a System);
+pub struct CheckContext(TypeId);
 
-impl<'a> ActionContext<'a> {
-    pub(crate) fn new(system: &'a System) -> Self {
-        Self(system)
+impl CheckContext {
+    pub(crate) fn new(system_id: TypeId) -> Self {
+        Self(system_id)
     }
 
-    pub fn get_id(&self) -> usize {
-        self.0.get_id()
+    pub fn get_id(&self) -> TypeId {
+        self.0
     }
 
-    pub fn get_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
-        entity.get_component()
+    pub fn has_component<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_component::<T>()
     }
 
-    pub fn get_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
-        entity.get_components::<T>()
+    pub fn is_component_read<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().is_component_read::<T>(self.0)
     }
 
-    pub fn read_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
-        entity.read_component::<T>(self.0.get_id())
+    pub fn has_read_component<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_read_component::<T>(self.0)
     }
 
-    pub fn read_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
-        entity.read_components::<T>(self.0.get_id())
+    pub fn has_unread_component<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_unread_component::<T>(self.0)
+    }
+
+    pub fn get_component<'e, T: IComponent, E: IEntity>(&self, entity: &'e E) -> Option<&'e T> {
+        entity.core().get_component()
+    }
+
+    pub fn get_components<'e, T: ComponentSet, E: IEntity>(
+        &self,
+        entity: &'e E,
+    ) -> Option<T::Refs<'e>> {
+        entity.core().get_components::<T>()
+    }
+
+    pub fn has_some_components<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_some_components::<T>()
+    }
+
+    pub fn has_every_component<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_every_component::<T>()
+    }
+
+    pub fn has_some_read_components<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_some_read_components::<T>(self.0)
+    }
+
+    pub fn has_every_read_component<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_every_read_component::<T>(self.0)
+    }
+
+    pub fn has_some_unread_components<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_some_unread_components::<T>(self.0)
+    }
+
+    pub fn has_every_unread_component<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
+        entity.core().has_every_unread_component::<T>(self.0)
+    }
+}
+
+pub struct ActionContext(TypeId);
+
+impl ActionContext {
+    pub(crate) fn new(system_id: TypeId) -> Self {
+        Self(system_id)
+    }
+
+    pub fn get_id(&self) -> TypeId {
+        self.0
+    }
+
+    pub fn get_component<'e, T: IComponent, E: IEntity>(&self, entity: &'e E) -> Option<&'e T> {
+        entity.core().get_component()
+    }
+
+    pub fn get_components<'e, T: ComponentSet, E: IEntity>(
+        &self,
+        entity: &'e E,
+    ) -> Option<T::Refs<'e>> {
+        entity.core().get_components::<T>()
+    }
+
+    pub fn read_component<'e, T: IComponent, E: IEntity>(&self, entity: &'e E) -> Option<&'e T> {
+        entity.core().read_component::<T>(self.0)
+    }
+
+    pub fn read_components<'e, T: ComponentSet, E: IEntity>(
+        &self,
+        entity: &'e E,
+    ) -> Option<T::Refs<'e>> {
+        entity.core().read_components::<T>(self.0)
     }
 }
 
 pub trait ComponentSet {
     type Refs<'a>;
 
-    fn get_every<'a>(entity: &'a Entity) -> Option<Self::Refs<'a>>;
-    fn read_every<'a>(entity: &'a Entity, system_id: usize) -> Option<Self::Refs<'a>>;
-    fn has_some(entity: &Entity) -> bool;
-    fn has_every(entity: &Entity) -> bool;
-    fn has_some_read(entity: &Entity, system_id: usize) -> bool;
-    fn has_every_read(entity: &Entity, system_id: usize) -> bool;
-    fn has_some_unread(entity: &Entity, system_id: usize) -> bool;
-    fn has_every_unread(entity: &Entity, system_id: usize) -> bool;
+    fn get_every<'a>(entity: &'a EntityCore) -> Option<Self::Refs<'a>>;
+    fn read_every<'a>(entity: &'a EntityCore, system_id: TypeId) -> Option<Self::Refs<'a>>;
+    fn has_some(entity: &EntityCore) -> bool;
+    fn has_every(entity: &EntityCore) -> bool;
+    fn has_some_read(entity: &EntityCore, system_id: TypeId) -> bool;
+    fn has_every_read(entity: &EntityCore, system_id: TypeId) -> bool;
+    fn has_some_unread(entity: &EntityCore, system_id: TypeId) -> bool;
+    fn has_every_unread(entity: &EntityCore, system_id: TypeId) -> bool;
 }
 
 macro_rules! impl_component_set {
@@ -250,7 +264,7 @@ macro_rules! impl_component_set {
         impl<$($t: IComponent),+> ComponentSet for ($($t,)+) {
             type Refs<'a> = ($(&'a $t,)+);
 
-            fn get_every<'a>(entity: &'a Entity) -> Option<Self::Refs<'a>> {
+            fn get_every<'a>(entity: &'a EntityCore) -> Option<Self::Refs<'a>> {
                 if !Self::has_every(entity) {
                     return None;
                 }
@@ -258,7 +272,7 @@ macro_rules! impl_component_set {
                 Some(($(entity.get_component::<$t>().unwrap(),)+))
             }
 
-            fn read_every<'a>(entity: &'a Entity, system_id: usize) -> Option<Self::Refs<'a>> {
+            fn read_every<'a>(entity: &'a EntityCore, system_id: TypeId) -> Option<Self::Refs<'a>> {
                 if !Self::has_every(entity) {
                     return None;
                 }
@@ -266,27 +280,27 @@ macro_rules! impl_component_set {
                 Some(($(entity.read_component::<$t>(system_id).unwrap(),)+))
             }
 
-            fn has_some(entity: &Entity) -> bool {
+            fn has_some(entity: &EntityCore) -> bool {
                 $(entity.has_component::<$t>())||+
             }
 
-            fn has_every(entity: &Entity) -> bool {
+            fn has_every(entity: &EntityCore) -> bool {
                 $(entity.has_component::<$t>())&&+
             }
 
-            fn has_some_read(entity: &Entity, system_id: usize) -> bool {
+            fn has_some_read(entity: &EntityCore, system_id: TypeId) -> bool {
                 $(entity.has_read_component::<$t>(system_id))||+
             }
 
-            fn has_every_read(entity: &Entity, system_id: usize) -> bool {
+            fn has_every_read(entity: &EntityCore, system_id: TypeId) -> bool {
                 $(entity.has_read_component::<$t>(system_id))&&+
             }
 
-            fn has_some_unread(entity: &Entity, system_id: usize) -> bool {
+            fn has_some_unread(entity: &EntityCore, system_id: TypeId) -> bool {
                 $(entity.has_unread_component::<$t>(system_id))||+
             }
 
-            fn has_every_unread(entity: &Entity, system_id: usize) -> bool {
+            fn has_every_unread(entity: &EntityCore, system_id: TypeId) -> bool {
                 $(entity.has_unread_component::<$t>(system_id))&&+
             }
         }
