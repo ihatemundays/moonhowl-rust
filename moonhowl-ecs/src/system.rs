@@ -35,7 +35,7 @@ impl System {
         entity.has_unread_component::<T>(self.0)
     }
 
-    pub fn read_component<'a, T: IComponent>(&self, entity: &'a mut Entity) -> Option<&'a T> {
+    pub fn read_component<'a, T: IComponent>(&self, entity: &'a Entity) -> Option<&'a T> {
         entity.read_component::<T>(self.0)
     }
 
