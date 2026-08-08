@@ -96,7 +96,7 @@ impl Entity {
         T::read_every(self, system_id)
     }
 
-    fn get_component<T: IComponent>(&self) -> Option<&T> {
+    pub fn get_component<T: IComponent>(&self) -> Option<&T> {
         if !self.has_component::<T>() {
             return None;
         }
@@ -106,7 +106,7 @@ impl Entity {
             .and_then(|component| (**component).as_any().downcast_ref::<T>())
     }
 
-    fn get_components<T: ComponentSet>(&self) -> Option<T::Refs<'_>> {
+    pub fn get_components<T: ComponentSet>(&self) -> Option<T::Refs<'_>> {
         T::get_every(self)
     }
 
