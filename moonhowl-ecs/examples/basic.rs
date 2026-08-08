@@ -20,7 +20,9 @@ struct Velocity {
 }
 
 #[ecs_entity]
-struct MovingThing {}
+struct MovingThing {
+    entity_core: EntityCore,
+}
 
 struct MovementLogger;
 

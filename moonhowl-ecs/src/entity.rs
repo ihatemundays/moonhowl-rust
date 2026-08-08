@@ -141,11 +141,11 @@ impl EntityCore {
 }
 
 pub trait IEntity: Send + 'static {
-    fn core(&self) -> &EntityCore;
-    fn core_mut(&mut self) -> &mut EntityCore;
+    fn get_core(&self) -> &EntityCore;
+    fn get_core_mut(&mut self) -> &mut EntityCore;
 
     fn get_id(&self) -> usize {
-        self.core().get_id()
+        self.get_core().get_id()
     }
 }
 
@@ -161,54 +161,54 @@ impl CheckContext {
     }
 
     pub fn has_component<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_component::<T>()
+        entity.get_core().has_component::<T>()
     }
 
     pub fn is_component_read<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().is_component_read::<T>(self.0)
+        entity.get_core().is_component_read::<T>(self.0)
     }
 
     pub fn has_read_component<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_read_component::<T>(self.0)
+        entity.get_core().has_read_component::<T>(self.0)
     }
 
     pub fn has_unread_component<T: IComponent, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_unread_component::<T>(self.0)
+        entity.get_core().has_unread_component::<T>(self.0)
     }
 
     pub fn get_component<'e, T: IComponent, E: IEntity>(&self, entity: &'e E) -> Option<&'e T> {
-        entity.core().get_component()
+        entity.get_core().get_component()
     }
 
     pub fn get_components<'e, T: ComponentSet, E: IEntity>(
         &self,
         entity: &'e E,
     ) -> Option<T::Refs<'e>> {
-        entity.core().get_components::<T>()
+        entity.get_core().get_components::<T>()
     }
 
     pub fn has_some_components<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_some_components::<T>()
+        entity.get_core().has_some_components::<T>()
     }
 
     pub fn has_every_component<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_every_component::<T>()
+        entity.get_core().has_every_component::<T>()
     }
 
     pub fn has_some_read_components<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_some_read_components::<T>(self.0)
+        entity.get_core().has_some_read_components::<T>(self.0)
     }
 
     pub fn has_every_read_component<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_every_read_component::<T>(self.0)
+        entity.get_core().has_every_read_component::<T>(self.0)
     }
 
     pub fn has_some_unread_components<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_some_unread_components::<T>(self.0)
+        entity.get_core().has_some_unread_components::<T>(self.0)
     }
 
     pub fn has_every_unread_component<T: ComponentSet, E: IEntity>(&self, entity: &E) -> bool {
-        entity.core().has_every_unread_component::<T>(self.0)
+        entity.get_core().has_every_unread_component::<T>(self.0)
     }
 }
 
@@ -224,25 +224,25 @@ impl ActionContext {
     }
 
     pub fn get_component<'e, T: IComponent, E: IEntity>(&self, entity: &'e E) -> Option<&'e T> {
-        entity.core().get_component()
+        entity.get_core().get_component()
     }
 
     pub fn get_components<'e, T: ComponentSet, E: IEntity>(
         &self,
         entity: &'e E,
     ) -> Option<T::Refs<'e>> {
-        entity.core().get_components::<T>()
+        entity.get_core().get_components::<T>()
     }
 
     pub fn read_component<'e, T: IComponent, E: IEntity>(&self, entity: &'e E) -> Option<&'e T> {
-        entity.core().read_component::<T>(self.0)
+        entity.get_core().read_component::<T>(self.0)
     }
 
     pub fn read_components<'e, T: ComponentSet, E: IEntity>(
         &self,
         entity: &'e E,
     ) -> Option<T::Refs<'e>> {
-        entity.core().read_components::<T>(self.0)
+        entity.get_core().read_components::<T>(self.0)
     }
 }
 
