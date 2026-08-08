@@ -25,15 +25,19 @@ impl World {
         self.entities.remove(&id)
     }
 
+    pub fn despawn_all(&mut self) {
+        self.entities.clear();
+    }
+
     pub fn contains(&self, id: usize) -> bool {
         self.entities.contains_key(&id)
     }
 
-    pub fn entity(&self, id: usize) -> Option<&Entity> {
+    pub fn get_entity(&self, id: usize) -> Option<&Entity> {
         self.entities.get(&id)
     }
 
-    pub fn entity_mut(&mut self, id: usize) -> Option<&mut Entity> {
+    pub fn get_entity_mut(&mut self, id: usize) -> Option<&mut Entity> {
         self.entities.get_mut(&id)
     }
 
