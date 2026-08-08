@@ -84,26 +84,15 @@ impl Entity {
             .get_mut()
             .unwrap()
             .insert(TypeId::of::<T>(), HashSet::new());
-
         self
     }
 
     pub fn unset_component<T: IComponent>(&mut self) -> &mut Self {
         self.components.remove(&TypeId::of::<T>());
         self.read_by.get_mut().unwrap().remove(&TypeId::of::<T>());
-
         self
     }
 
-    /// Associates `context` with this entity — e.g. a handle back to
-    /// whatever it has a 1:1 relationship with (a `Player` node, say), for
-    /// systems to reach during `run`. Only one context value is stored at a
-    /// time; setting a new one replaces the old.
-    ///
-    /// Bounded by `Send`, not `Sync`: `World::run` moves each entity into
-    /// the one thread that runs systems against it, and nothing else ever
-    /// touches that entity concurrently, so the context never needs to be
-    /// shared across threads — only sent into the one it ends up on.
     pub fn set_context<C: Any + Send>(&mut self, context: C) -> &mut Self {
         self.context = Some(Box::new(context));
         self
