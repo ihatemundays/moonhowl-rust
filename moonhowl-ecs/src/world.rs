@@ -60,6 +60,19 @@ impl World {
         id
     }
 
+    pub fn deregister_system(&mut self, id: usize) -> (System, Box<dyn ISystem>) {
+        self.systems.remove(id)
+    }
+
+    pub fn deregister_all_systems(&mut self) {
+        self.systems.clear();
+    }
+
+    pub fn reset(&mut self) {
+        self.despawn_all();
+        self.deregister_all_systems();
+    }
+
     /// Runs every registered system against every entity. Entities run
     /// concurrently (one thread per entity); each thread owns its entity
     /// exclusively via `&mut Entity`, so systems can mutate components
