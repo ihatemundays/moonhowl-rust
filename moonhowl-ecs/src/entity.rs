@@ -98,11 +98,11 @@ impl Entity {
         self
     }
 
-    pub fn context<C: Any + Send>(&self) -> Option<&C> {
+    pub fn get_context<C: Any + Send>(&self) -> Option<&C> {
         self.context.as_deref()?.downcast_ref::<C>()
     }
 
-    pub fn context_mut<C: Any + Send>(&mut self) -> Option<&mut C> {
+    pub fn get_context_mut<C: Any + Send>(&mut self) -> Option<&mut C> {
         self.context.as_deref_mut()?.downcast_mut::<C>()
     }
 
