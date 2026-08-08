@@ -1,4 +1,4 @@
-use moonhowl_ecs::{Entity, IComponent, ISystem, System, World};
+use moonhowl_ecs::{ActionContext, CheckContext, Entity, IComponent, ISystem, World};
 use std::any::Any;
 
 struct Position {
@@ -26,15 +26,13 @@ impl IComponent for Velocity {
 struct MovementLogger;
 
 impl ISystem for MovementLogger {
-    fn run(&self, system: &System, entity: &mut Entity) {
-        if !system.has_some_unread_components::<(Position, Velocity)>(entity) {
-            return;
-        }
+    fn check(&self, system: &CheckContext, entity: &Entity) -> bool {
+        system.has_every_unread_component::<(Position, Velocity)>(entity)
+    }
 
-        let Some(position) = system.get_component::<Position>(entity) else {
-            return;
-        };
-        let Some(velocity) = system.get_component::<Velocity>(entity) else {
+    fn and_then(&self, system: &ActionContext, entity: &Entity) {
+        let Some((position, velocity)) = system.read_components::<(Position, Velocity)>(entity)
+        else {
             return;
         };
 
@@ -54,20 +52,20 @@ fn main() {
 
     let moving = world.spawn();
     world
-        .entity_mut(moving)
+        .get_entity_mut(moving)
         .unwrap()
         .set_component(Position { x: 0.0, y: 0.0 })
         .set_component(Velocity { dx: 1.0, dy: 0.5 });
 
     let stationary = world.spawn();
     world
-        .entity_mut(stationary)
+        .get_entity_mut(stationary)
         .unwrap()
         .set_component(Position { x: 5.0, y: 5.0 });
 
     world.register_system(MovementLogger);
 
-    // stationary is skipped: it has no Velocity, so MovementLogger::run
-    // returns early on it.
+    // stationary is skipped: it has no Velocity, so MovementLogger::check
+    // never passes for it.
     world.run();
 }

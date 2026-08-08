@@ -1,4 +1,4 @@
-use crate::entity::Entity;
+use crate::entity::{ActionContext, CheckContext, Entity};
 use crate::system::{ISystem, System};
 use std::collections::HashMap;
 use std::thread;
@@ -76,11 +76,13 @@ impl World {
                 scope.spawn(move || {
                     let passed: Vec<&(System, Box<dyn ISystem>)> = systems
                         .iter()
-                        .filter(|(system, system_impl)| system_impl.check(system, entity))
+                        .filter(|(system, system_impl)| {
+                            system_impl.check(&CheckContext::new(system), entity)
+                        })
                         .collect();
 
                     for (system, system_impl) in passed {
-                        system_impl.and_then(system, entity);
+                        system_impl.and_then(&ActionContext::new(system), entity);
                     }
                 });
             }
