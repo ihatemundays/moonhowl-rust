@@ -63,8 +63,10 @@ impl World {
     /// Runs every registered system against every entity. Entities run
     /// concurrently (one thread per entity); each thread owns its entity
     /// exclusively via `&mut Entity`, so systems can mutate components
-    /// without any cross-entity data races. Within an entity's thread,
-    /// systems still run one after another, in registration order.
+    /// without any cross-entity data races. Within an entity's thread, all
+    /// systems' `check`s run first against the entity's original state, then
+    /// the `and_then`s of the systems that passed run in registration order —
+    /// so no check is affected by another system's mutations this pass.
     pub fn run(&mut self) {
         let Self { entities, systems } = self;
 
@@ -72,8 +74,13 @@ impl World {
             for entity in entities.values_mut() {
                 let systems = &*systems;
                 scope.spawn(move || {
-                    for (system, system_impl) in systems {
-                        system_impl.run(system, entity);
+                    let passed: Vec<&(System, Box<dyn ISystem>)> = systems
+                        .iter()
+                        .filter(|(system, system_impl)| system_impl.check(system, entity))
+                        .collect();
+
+                    for (system, system_impl) in passed {
+                        system_impl.and_then(system, entity);
                     }
                 });
             }
