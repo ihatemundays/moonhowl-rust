@@ -1,6 +1,6 @@
-use crate::entity::{ActionContext, CheckContext, IEntity};
+use crate::entity::{ActionContext, CheckContext, Entity};
 
-pub trait ISystem<E: IEntity>: Send + Sync {
-    fn check(&self, system: &CheckContext, entity: &E) -> bool;
-    fn and_then(&self, system: &ActionContext, entity: &E);
+pub trait ISystem: Send + Sync {
+    fn check(&self, system: &CheckContext, entity: &Entity) -> bool;
+    fn and_then(&self, system: &ActionContext, entity: &Entity);
 }

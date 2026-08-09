@@ -1,5 +1,5 @@
-use moonhowl_ecs::{ActionContext, CheckContext, EntityCore, IComponent, IEntity, ISystem, World};
-use moonhowl_macros::{ecs_component, ecs_entity};
+use moonhowl_ecs::{ActionContext, CheckContext, Entity, IComponent, ISystem, World};
+use moonhowl_macros::ecs_component;
 use std::any::Any;
 
 struct Position {
@@ -19,20 +19,15 @@ struct Velocity {
     dy: f32,
 }
 
-#[ecs_entity]
-struct MovingThing {
-    entity_core: EntityCore,
-}
-
 struct MovementLogger;
 
-impl ISystem<MovingThing> for MovementLogger {
-    fn check(&self, system: &CheckContext, entity: &MovingThing) -> bool {
-        system.has_every_unread_component::<(Position, Velocity), _>(entity)
+impl ISystem for MovementLogger {
+    fn check(&self, system: &CheckContext, entity: &Entity) -> bool {
+        system.has_every_unread_component::<(Position, Velocity)>(entity)
     }
 
-    fn and_then(&self, system: &ActionContext, entity: &MovingThing) {
-        let Some((position, velocity)) = system.read_components::<(Position, Velocity), _>(entity)
+    fn and_then(&self, system: &ActionContext, entity: &Entity) {
+        let Some((position, velocity)) = system.read_components::<(Position, Velocity)>(entity)
         else {
             return;
         };
@@ -51,24 +46,20 @@ impl ISystem<MovingThing> for MovementLogger {
 fn main() {
     let mut world = World::new();
 
-    let mut moving = MovingThing {
-        entity_core: EntityCore::new(),
-    };
-    moving
-        .entity_core
+    let moving = world.spawn();
+    world
+        .get_entity_mut(moving)
+        .unwrap()
         .set_component(Position { x: 0.0, y: 0.0 })
         .set_component(Velocity { dx: 1.0, dy: 0.5 });
-    world.spawn(moving);
 
-    let mut stationary = MovingThing {
-        entity_core: EntityCore::new(),
-    };
-    stationary
-        .entity_core
+    let stationary = world.spawn();
+    world
+        .get_entity_mut(stationary)
+        .unwrap()
         .set_component(Position { x: 5.0, y: 5.0 });
-    world.spawn(stationary);
 
-    world.register_system::<MovingThing, _>(MovementLogger);
+    world.register_system(MovementLogger);
 
     // stationary is skipped: it has no Velocity, so MovementLogger::check
     // never passes for it.

@@ -4,6 +4,6 @@ mod system;
 mod world;
 
 pub use component::IComponent;
-pub use entity::{ActionContext, CheckContext, ComponentSet, EntityCore, IEntity};
+pub use entity::{ActionContext, CheckContext, ComponentSet, Entity};
 pub use system::ISystem;
 pub use world::World;
