@@ -12,7 +12,7 @@ struct ComponentEntry {
 pub struct EntityCore {
     id: usize,
     components: HashMap<TypeId, ComponentEntry>,
-    context: Option<Box<dyn Any + Send + Sync>>,
+    context: Option<Box<dyn Any>>,
 }
 
 impl EntityCore {
@@ -118,16 +118,16 @@ impl EntityCore {
         self
     }
 
-    pub fn set_context<C: Any + Send + Sync>(&mut self, context: C) -> &mut Self {
+    pub fn set_context<C: Any>(&mut self, context: C) -> &mut Self {
         self.context = Some(Box::new(context));
         self
     }
 
-    pub fn get_context<C: Any + Send + Sync>(&self) -> Option<&C> {
+    pub fn get_context<C: Any>(&self) -> Option<&C> {
         self.context.as_deref()?.downcast_ref::<C>()
     }
 
-    pub fn get_context_mut<C: Any + Send + Sync>(&mut self) -> Option<&mut C> {
+    pub fn get_context_mut<C: Any>(&mut self) -> Option<&mut C> {
         self.context.as_deref_mut()?.downcast_mut::<C>()
     }
 
@@ -137,7 +137,7 @@ impl EntityCore {
     }
 }
 
-pub trait IEntity: Send + Sync + 'static {
+pub trait IEntity: 'static {
     fn get_core(&self) -> &EntityCore;
     fn get_core_mut(&mut self) -> &mut EntityCore;
 

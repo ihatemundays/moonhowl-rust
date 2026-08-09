@@ -3,26 +3,25 @@ use crate::system::ISystem;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::thread;
 
-trait ErasedSystem: Send + Sync {
-    fn check_erased(&self, system: &CheckContext, entity: &(dyn Any + Send + Sync)) -> bool;
-    fn and_then_erased(&self, system: &ActionContext, entity: &(dyn Any + Send + Sync));
+trait ErasedSystem {
+    fn check_erased(&self, system: &CheckContext, entity: &dyn Any) -> bool;
+    fn and_then_erased(&self, system: &ActionContext, entity: &dyn Any);
 }
 
 struct SystemWrapper<E, S> {
     system: S,
-    _marker: PhantomData<fn() -> E>,
+    _marker: PhantomData<E>,
 }
 
 impl<E: IEntity, S: ISystem<E>> ErasedSystem for SystemWrapper<E, S> {
-    fn check_erased(&self, system: &CheckContext, entity: &(dyn Any + Send + Sync)) -> bool {
+    fn check_erased(&self, system: &CheckContext, entity: &dyn Any) -> bool {
         entity
             .downcast_ref::<E>()
             .is_some_and(|entity| self.system.check(system, entity))
     }
 
-    fn and_then_erased(&self, system: &ActionContext, entity: &(dyn Any + Send + Sync)) {
+    fn and_then_erased(&self, system: &ActionContext, entity: &dyn Any) {
         if let Some(entity) = entity.downcast_ref::<E>() {
             self.system.and_then(system, entity);
         }
@@ -31,7 +30,7 @@ impl<E: IEntity, S: ISystem<E>> ErasedSystem for SystemWrapper<E, S> {
 
 #[derive(Default)]
 pub struct World {
-    entities: HashMap<TypeId, HashMap<usize, Box<dyn Any + Send + Sync>>>,
+    entities: HashMap<TypeId, HashMap<usize, Box<dyn Any>>>,
     systems: HashMap<TypeId, Vec<(TypeId, Box<dyn ErasedSystem>)>>,
 }
 
@@ -136,26 +135,20 @@ impl World {
     }
 
     pub fn run(&mut self) {
-        let Self { entities, systems } = self;
+        for (type_id, bucket) in &self.entities {
+            let Some(matching_systems) = self.systems.get(type_id) else {
+                continue;
+            };
 
-        thread::scope(|scope| {
-            for (type_id, matching_systems) in systems.iter() {
-                let Some(bucket) = entities.get(type_id) else {
-                    continue;
-                };
+            for entity in bucket.values() {
+                let entity = entity.as_ref();
 
                 for (system_id, system_impl) in matching_systems {
-                    scope.spawn(move || {
-                        for entity in bucket.values() {
-                            let entity: &(dyn Any + Send + Sync) = entity.as_ref();
-                            if system_impl.check_erased(&CheckContext::new(*system_id), entity) {
-                                system_impl
-                                    .and_then_erased(&ActionContext::new(*system_id), entity);
-                            }
-                        }
-                    });
+                    if system_impl.check_erased(&CheckContext::new(*system_id), entity) {
+                        system_impl.and_then_erased(&ActionContext::new(*system_id), entity);
+                    }
                 }
             }
-        });
+        }
     }
 }
