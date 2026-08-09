@@ -16,7 +16,7 @@ impl World {
     }
 
     pub fn spawn<M: 'static>(&mut self) -> usize {
-        let entity = Entity::new();
+        let entity = Entity::new::<M>();
         let id = entity.get_id();
         self.entities
             .entry(TypeId::of::<M>())

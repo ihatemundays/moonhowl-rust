@@ -1,8 +1,8 @@
 use crate::component::IComponent;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 struct ComponentEntry {
     component: Box<dyn IComponent>,
@@ -16,17 +16,24 @@ pub struct Entity {
 }
 
 impl Entity {
-    pub fn new() -> Self {
+    pub fn new<M: 'static>() -> Self {
         Self {
-            id: Self::get_new_id(),
+            id: Self::get_new_id::<M>(),
             components: HashMap::new(),
             context: None,
         }
     }
 
-    fn get_new_id() -> usize {
-        static COUNTER: AtomicUsize = AtomicUsize::new(1);
-        COUNTER.fetch_add(1, Ordering::Relaxed)
+    fn get_new_id<M: 'static>() -> usize {
+        static COUNTERS: LazyLock<Mutex<HashMap<TypeId, AtomicUsize>>> =
+            LazyLock::new(|| Mutex::new(HashMap::new()));
+
+        COUNTERS
+            .lock()
+            .unwrap()
+            .entry(TypeId::of::<M>())
+            .or_insert_with(|| AtomicUsize::new(1))
+            .fetch_add(1, Ordering::Relaxed)
     }
 
     pub fn get_id(&self) -> usize {
