@@ -19,6 +19,8 @@ struct Velocity {
     dy: f32,
 }
 
+struct MovingThing;
+
 struct MovementLogger;
 
 impl ISystem for MovementLogger {
@@ -46,20 +48,20 @@ impl ISystem for MovementLogger {
 fn main() {
     let mut world = World::new();
 
-    let moving = world.spawn();
+    let moving = world.spawn::<MovingThing>();
     world
-        .get_entity_mut(moving)
+        .get_entity_mut::<MovingThing>(moving)
         .unwrap()
         .set_component(Position { x: 0.0, y: 0.0 })
         .set_component(Velocity { dx: 1.0, dy: 0.5 });
 
-    let stationary = world.spawn();
+    let stationary = world.spawn::<MovingThing>();
     world
-        .get_entity_mut(stationary)
+        .get_entity_mut::<MovingThing>(stationary)
         .unwrap()
         .set_component(Position { x: 5.0, y: 5.0 });
 
-    world.register_system(MovementLogger);
+    world.register_system::<MovingThing, _>(MovementLogger);
 
     // stationary is skipped: it has no Velocity, so MovementLogger::check
     // never passes for it.
