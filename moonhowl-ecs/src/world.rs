@@ -126,6 +126,43 @@ impl World {
         }
     }
 
+    pub fn run_checked_sync(&mut self) {
+        let Self { entities, systems } = self;
+
+        let matches: Vec<(TypeId, Vec<(usize, TypeId)>)> = thread::scope(|scope| {
+            let handles: Vec<_> = entities
+                .iter_mut()
+                .filter_map(|(type_id, bucket)| {
+                    let matching_systems = systems.get(type_id)?;
+                    let type_id = *type_id;
+                    Some(scope.spawn(move || (type_id, Self::check_bucket(bucket, matching_systems))))
+                })
+                .collect();
+
+            handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+        });
+
+        for (type_id, entity_matches) in matches {
+            let Some(bucket) = entities.get(&type_id) else {
+                continue;
+            };
+            let Some(matching_systems) = systems.get(&type_id) else {
+                continue;
+            };
+
+            for (entity_id, system_id) in entity_matches {
+                let Some(entity) = bucket.get(&entity_id) else {
+                    continue;
+                };
+                let Some((_, system_impl)) = matching_systems.iter().find(|(id, _)| *id == system_id) else {
+                    continue;
+                };
+
+                system_impl.and_then(&ActionContext::new(system_id), entity);
+            }
+        }
+    }
+
     fn run_bucket(bucket: &mut HashMap<usize, Entity>, matching_systems: &[(TypeId, Box<dyn ISystem>)]) {
         for entity in bucket.values_mut() {
             let mut passed: Vec<&(TypeId, Box<dyn ISystem>)> =
@@ -138,5 +175,19 @@ impl World {
                 system_impl.and_then(&ActionContext::new(*system_id), entity);
             }
         }
+    }
+
+    fn check_bucket(bucket: &HashMap<usize, Entity>, matching_systems: &[(TypeId, Box<dyn ISystem>)]) -> Vec<(usize, TypeId)> {
+        let mut matches = Vec::new();
+
+        for (entity_id, entity) in bucket.iter() {
+            for (system_id, system_impl) in matching_systems {
+                if system_impl.check(&CheckContext::new(*system_id), entity) {
+                    matches.push((*entity_id, *system_id));
+                }
+            }
+        }
+
+        matches
     }
 }
