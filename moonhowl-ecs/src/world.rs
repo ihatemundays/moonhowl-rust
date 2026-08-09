@@ -109,20 +109,34 @@ impl World {
                     continue;
                 };
 
-                scope.spawn(move || {
-                    for entity in bucket.values_mut() {
-                        let mut passed: Vec<&(TypeId, Box<dyn ISystem>)> =
-                            Vec::with_capacity(matching_systems.len());
-                        passed.extend(matching_systems.iter().filter(|(system_id, system_impl)| {
-                            system_impl.check(&CheckContext::new(*system_id), entity)
-                        }));
-
-                        for (system_id, system_impl) in passed {
-                            system_impl.and_then(&ActionContext::new(*system_id), entity);
-                        }
-                    }
-                });
+                scope.spawn(move || Self::run_bucket(bucket, matching_systems));
             }
         });
+    }
+    
+    pub fn run_sync(&mut self) {
+        let Self { entities, systems } = self;
+
+        for (type_id, bucket) in entities.iter_mut() {
+            let Some(matching_systems) = systems.get(type_id) else {
+                continue;
+            };
+
+            Self::run_bucket(bucket, matching_systems);
+        }
+    }
+
+    fn run_bucket(bucket: &mut HashMap<usize, Entity>, matching_systems: &[(TypeId, Box<dyn ISystem>)]) {
+        for entity in bucket.values_mut() {
+            let mut passed: Vec<&(TypeId, Box<dyn ISystem>)> =
+                Vec::with_capacity(matching_systems.len());
+            passed.extend(matching_systems.iter().filter(|(system_id, system_impl)| {
+                system_impl.check(&CheckContext::new(*system_id), entity)
+            }));
+
+            for (system_id, system_impl) in passed {
+                system_impl.and_then(&ActionContext::new(*system_id), entity);
+            }
+        }
     }
 }
