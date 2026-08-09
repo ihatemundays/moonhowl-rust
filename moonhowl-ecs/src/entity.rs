@@ -9,10 +9,16 @@ struct ComponentEntry {
     read_by: Mutex<HashSet<TypeId>>,
 }
 
+enum PendingOp {
+    Set(TypeId, Box<dyn IComponent>),
+    Unset(TypeId),
+}
+
 pub struct Entity {
     id: usize,
     components: HashMap<TypeId, ComponentEntry>,
     context: Option<Box<dyn Any + Send>>,
+    pending: Mutex<Vec<PendingOp>>,
 }
 
 impl Entity {
@@ -21,6 +27,7 @@ impl Entity {
             id: Self::get_new_id::<M>(),
             components: HashMap::new(),
             context: None,
+            pending: Mutex::new(Vec::new()),
         }
     }
 
@@ -123,6 +130,39 @@ impl Entity {
     pub fn unset_component<T: IComponent>(&mut self) -> &mut Self {
         self.components.remove(&TypeId::of::<T>());
         self
+    }
+
+    fn queue_set_component<T: IComponent>(&self, component: T) {
+        self.pending
+            .lock()
+            .unwrap()
+            .push(PendingOp::Set(TypeId::of::<T>(), Box::new(component)));
+    }
+
+    fn queue_unset_component<T: IComponent>(&self) {
+        self.pending
+            .lock()
+            .unwrap()
+            .push(PendingOp::Unset(TypeId::of::<T>()));
+    }
+
+    pub(crate) fn commit(&mut self) {
+        for op in self.pending.get_mut().unwrap().drain(..) {
+            match op {
+                PendingOp::Set(type_id, component) => {
+                    self.components.insert(
+                        type_id,
+                        ComponentEntry {
+                            component,
+                            read_by: Mutex::new(HashSet::new()),
+                        },
+                    );
+                }
+                PendingOp::Unset(type_id) => {
+                    self.components.remove(&type_id);
+                }
+            }
+        }
     }
 
     pub fn set_context<C: Any + Send>(&mut self, context: C) -> &mut Self {
@@ -229,6 +269,18 @@ impl ActionContext {
 
     pub fn read_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
         entity.read_components::<T>(self.0)
+    }
+
+    /// Queues a component to be set on `entity`. The change is not visible until
+    /// [`World::confirm`](crate::World::confirm) is called.
+    pub fn set_component<T: IComponent>(&self, entity: &Entity, component: T) {
+        entity.queue_set_component(component);
+    }
+
+    /// Queues a component to be removed from `entity`. The change is not visible
+    /// until [`World::confirm`](crate::World::confirm) is called.
+    pub fn unset_component<T: IComponent>(&self, entity: &Entity) {
+        entity.queue_unset_component::<T>();
     }
 }
 

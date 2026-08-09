@@ -163,6 +163,14 @@ impl World {
         }
     }
 
+    pub fn confirm(&mut self) {
+        for bucket in self.entities.values_mut() {
+            for entity in bucket.values_mut() {
+                entity.commit();
+            }
+        }
+    }
+
     fn run_bucket(bucket: &mut HashMap<usize, Entity>, matching_systems: &[(TypeId, Box<dyn ISystem>)]) {
         for entity in bucket.values_mut() {
             let mut passed: Vec<&(TypeId, Box<dyn ISystem>)> =
