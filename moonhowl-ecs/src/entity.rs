@@ -12,7 +12,7 @@ struct ComponentEntry {
 pub struct EntityCore {
     id: usize,
     components: HashMap<TypeId, ComponentEntry>,
-    context: Option<Box<dyn Any + Send>>,
+    context: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl EntityCore {
@@ -52,9 +52,6 @@ impl EntityCore {
     }
 
     fn has_read_component<T: IComponent>(&self, system_id: TypeId) -> bool {
-        // is_component_read already reads false for an absent component
-        // (no entry, no read set), so the has_component check that used to
-        // gate this is redundant.
         self.is_component_read::<T>(system_id)
     }
 
@@ -121,16 +118,16 @@ impl EntityCore {
         self
     }
 
-    pub fn set_context<C: Any + Send>(&mut self, context: C) -> &mut Self {
+    pub fn set_context<C: Any + Send + Sync>(&mut self, context: C) -> &mut Self {
         self.context = Some(Box::new(context));
         self
     }
 
-    pub fn get_context<C: Any + Send>(&self) -> Option<&C> {
+    pub fn get_context<C: Any + Send + Sync>(&self) -> Option<&C> {
         self.context.as_deref()?.downcast_ref::<C>()
     }
 
-    pub fn get_context_mut<C: Any + Send>(&mut self) -> Option<&mut C> {
+    pub fn get_context_mut<C: Any + Send + Sync>(&mut self) -> Option<&mut C> {
         self.context.as_deref_mut()?.downcast_mut::<C>()
     }
 
@@ -140,7 +137,7 @@ impl EntityCore {
     }
 }
 
-pub trait IEntity: Send + 'static {
+pub trait IEntity: Send + Sync + 'static {
     fn get_core(&self) -> &EntityCore;
     fn get_core_mut(&mut self) -> &mut EntityCore;
 

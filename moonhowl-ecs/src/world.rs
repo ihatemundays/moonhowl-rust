@@ -6,26 +6,23 @@ use std::marker::PhantomData;
 use std::thread;
 
 trait ErasedSystem: Send + Sync {
-    fn check_erased(&self, system: &CheckContext, entity: &(dyn Any + Send)) -> bool;
-    fn and_then_erased(&self, system: &ActionContext, entity: &(dyn Any + Send));
+    fn check_erased(&self, system: &CheckContext, entity: &(dyn Any + Send + Sync)) -> bool;
+    fn and_then_erased(&self, system: &ActionContext, entity: &(dyn Any + Send + Sync));
 }
 
 struct SystemWrapper<E, S> {
     system: S,
-    // fn() -> E, not E directly: a bare PhantomData<E> would make
-    // SystemWrapper's Send/Sync depend on E's, but E only needs to be
-    // IEntity (Send), and ErasedSystem must be Send + Sync regardless.
     _marker: PhantomData<fn() -> E>,
 }
 
 impl<E: IEntity, S: ISystem<E>> ErasedSystem for SystemWrapper<E, S> {
-    fn check_erased(&self, system: &CheckContext, entity: &(dyn Any + Send)) -> bool {
+    fn check_erased(&self, system: &CheckContext, entity: &(dyn Any + Send + Sync)) -> bool {
         entity
             .downcast_ref::<E>()
             .is_some_and(|entity| self.system.check(system, entity))
     }
 
-    fn and_then_erased(&self, system: &ActionContext, entity: &(dyn Any + Send)) {
+    fn and_then_erased(&self, system: &ActionContext, entity: &(dyn Any + Send + Sync)) {
         if let Some(entity) = entity.downcast_ref::<E>() {
             self.system.and_then(system, entity);
         }
@@ -34,12 +31,7 @@ impl<E: IEntity, S: ISystem<E>> ErasedSystem for SystemWrapper<E, S> {
 
 #[derive(Default)]
 pub struct World {
-    entities: HashMap<TypeId, HashMap<usize, Box<dyn Any + Send>>>,
-    // A system type is a singleton per entity type — registering the same S
-    // twice for the same E replaces the old registration rather than running
-    // two copies. Kept as a Vec (not a HashMap keyed by system TypeId) so
-    // registration order — and therefore and_then execution order — stays
-    // deterministic; a HashMap's iteration order is not.
+    entities: HashMap<TypeId, HashMap<usize, Box<dyn Any + Send + Sync>>>,
     systems: HashMap<TypeId, Vec<(TypeId, Box<dyn ErasedSystem>)>>,
 }
 
@@ -143,42 +135,23 @@ impl World {
         self.deregister_all_systems();
     }
 
-    /// Runs every registered system against every entity of the type it was
-    /// registered for. Entities run concurrently (one thread per entity);
-    /// each thread owns its entity exclusively, so systems can mutate
-    /// components without any cross-entity data races. Within an entity's
-    /// thread, all matching systems' `check`s run first against the entity's
-    /// original state, then the `and_then`s of the systems that passed run
-    /// in registration order — so no check is affected by another system's
-    /// mutations this pass.
-    ///
-    /// A system only ever runs against entities of the type it was
-    /// registered for: entity types with no matching systems are skipped
-    /// entirely, with no per-entity `check` call at all.
     pub fn run(&mut self) {
         let Self { entities, systems } = self;
 
         thread::scope(|scope| {
-            for (type_id, bucket) in entities.iter_mut() {
-                let Some(matching_systems) = systems.get(type_id) else {
+            for (type_id, matching_systems) in systems.iter() {
+                let Some(bucket) = entities.get(type_id) else {
                     continue;
                 };
 
-                for entity in bucket.values_mut() {
-                    let entity: &mut (dyn Any + Send) = &mut **entity;
+                for (system_id, system_impl) in matching_systems {
                     scope.spawn(move || {
-                        let mut passed: Vec<(TypeId, &Box<dyn ErasedSystem>)> =
-                            Vec::with_capacity(matching_systems.len());
-                        passed.extend(matching_systems.iter().filter_map(
-                            |(system_id, system_impl)| {
+                        for entity in bucket.values() {
+                            let entity: &(dyn Any + Send + Sync) = entity.as_ref();
+                            if system_impl.check_erased(&CheckContext::new(*system_id), entity) {
                                 system_impl
-                                    .check_erased(&CheckContext::new(*system_id), entity)
-                                    .then_some((*system_id, system_impl))
-                            },
-                        ));
-
-                        for (system_id, system_impl) in passed {
-                            system_impl.and_then_erased(&ActionContext::new(system_id), entity);
+                                    .and_then_erased(&ActionContext::new(*system_id), entity);
+                            }
                         }
                     });
                 }
