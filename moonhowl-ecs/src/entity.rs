@@ -10,8 +10,11 @@ struct ComponentEntry {
 }
 
 enum PendingOp {
-    Set(TypeId, Box<dyn IComponent>),
-    Unset(TypeId),
+    SetComponent(TypeId, Box<dyn IComponent>),
+    UnsetComponent(TypeId),
+    SetContext(Box<dyn Any + Send>),
+    ClearContext,
+    Despawn,
 }
 
 pub struct Entity {
@@ -136,20 +139,37 @@ impl Entity {
         self.pending
             .lock()
             .unwrap()
-            .push(PendingOp::Set(TypeId::of::<T>(), Box::new(component)));
+            .push(PendingOp::SetComponent(TypeId::of::<T>(), Box::new(component)));
     }
 
     fn queue_unset_component<T: IComponent>(&self) {
         self.pending
             .lock()
             .unwrap()
-            .push(PendingOp::Unset(TypeId::of::<T>()));
+            .push(PendingOp::UnsetComponent(TypeId::of::<T>()));
     }
 
-    pub(crate) fn commit(&mut self) {
+    fn queue_set_context<C: Any + Send>(&self, context: C) {
+        self.pending
+            .lock()
+            .unwrap()
+            .push(PendingOp::SetContext(Box::new(context)));
+    }
+
+    fn queue_clear_context(&self) {
+        self.pending.lock().unwrap().push(PendingOp::ClearContext);
+    }
+
+    fn queue_despawn(&self) {
+        self.pending.lock().unwrap().push(PendingOp::Despawn);
+    }
+
+    pub(crate) fn commit(&mut self) -> bool {
+        let mut despawn = false;
+
         for op in self.pending.get_mut().unwrap().drain(..) {
             match op {
-                PendingOp::Set(type_id, component) => {
+                PendingOp::SetComponent(type_id, component) => {
                     self.components.insert(
                         type_id,
                         ComponentEntry {
@@ -158,11 +178,22 @@ impl Entity {
                         },
                     );
                 }
-                PendingOp::Unset(type_id) => {
+                PendingOp::UnsetComponent(type_id) => {
                     self.components.remove(&type_id);
+                }
+                PendingOp::SetContext(context) => {
+                    self.context = Some(context);
+                }
+                PendingOp::ClearContext => {
+                    self.context = None;
+                }
+                PendingOp::Despawn => {
+                    despawn = true;
                 }
             }
         }
+
+        despawn
     }
 
     pub fn set_context<C: Any + Send>(&mut self, context: C) -> &mut Self {
@@ -244,15 +275,21 @@ impl CheckContext {
     }
 }
 
-pub struct ActionContext(TypeId);
+pub struct ActionContext<'w> {
+    system_id: TypeId,
+    spawn_queue: &'w Mutex<Vec<(TypeId, Entity)>>,
+}
 
-impl ActionContext {
-    pub(crate) fn new(system_id: TypeId) -> Self {
-        Self(system_id)
+impl<'w> ActionContext<'w> {
+    pub(crate) fn new(system_id: TypeId, spawn_queue: &'w Mutex<Vec<(TypeId, Entity)>>) -> Self {
+        Self {
+            system_id,
+            spawn_queue,
+        }
     }
 
     pub fn get_id(&self) -> TypeId {
-        self.0
+        self.system_id
     }
 
     pub fn get_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
@@ -264,23 +301,39 @@ impl ActionContext {
     }
 
     pub fn read_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
-        entity.read_component::<T>(self.0)
+        entity.read_component::<T>(self.system_id)
     }
 
     pub fn read_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
-        entity.read_components::<T>(self.0)
+        entity.read_components::<T>(self.system_id)
     }
 
-    /// Queues a component to be set on `entity`. The change is not visible until
-    /// [`World::confirm`](crate::World::confirm) is called.
     pub fn set_component<T: IComponent>(&self, entity: &Entity, component: T) {
         entity.queue_set_component(component);
     }
 
-    /// Queues a component to be removed from `entity`. The change is not visible
-    /// until [`World::confirm`](crate::World::confirm) is called.
     pub fn unset_component<T: IComponent>(&self, entity: &Entity) {
         entity.queue_unset_component::<T>();
+    }
+
+    pub fn set_context<C: Any + Send>(&self, entity: &Entity, context: C) {
+        entity.queue_set_context(context);
+    }
+
+    pub fn clear_context(&self, entity: &Entity) {
+        entity.queue_clear_context();
+    }
+
+    pub fn despawn(&self, entity: &Entity) {
+        entity.queue_despawn();
+    }
+
+    pub fn spawn<M: 'static>(&self, build: impl FnOnce(&mut Entity)) -> usize {
+        let mut entity = Entity::new::<M>();
+        build(&mut entity);
+        let id = entity.get_id();
+        self.spawn_queue.lock().unwrap().push((TypeId::of::<M>(), entity));
+        id
     }
 }
 
@@ -353,3 +406,407 @@ impl_component_set!(A, B, C, D, E);
 impl_component_set!(A, B, C, D, E, F);
 impl_component_set!(A, B, C, D, E, F, G);
 impl_component_set!(A, B, C, D, E, F, G, H);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    struct Position(i32);
+
+    impl IComponent for Position {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    struct Velocity(i32);
+
+    impl IComponent for Velocity {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    struct Health(i32);
+
+    impl IComponent for Health {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Ctx(i32);
+
+    struct MarkerA;
+    struct MarkerB;
+
+    #[test]
+    fn new_assigns_unique_incrementing_ids_per_marker() {
+        let a1 = Entity::new::<MarkerA>();
+        let a2 = Entity::new::<MarkerA>();
+        assert_ne!(a1.get_id(), a2.get_id());
+        assert!(a2.get_id() > a1.get_id());
+    }
+
+    #[test]
+    fn get_set_unset_component_roundtrip() {
+        let mut entity = Entity::new::<MarkerA>();
+        assert!(entity.get_component::<Position>().is_none());
+        assert!(!entity.has_component::<Position>());
+
+        entity.set_component(Position(1));
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(1)));
+        assert!(entity.has_component::<Position>());
+
+        entity.unset_component::<Position>();
+        assert!(entity.get_component::<Position>().is_none());
+        assert!(!entity.has_component::<Position>());
+    }
+
+    #[test]
+    fn set_component_overwrites_existing() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.set_component(Position(2));
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(2)));
+    }
+
+    #[test]
+    fn component_set_single_tuple() {
+        let mut entity = Entity::new::<MarkerA>();
+        assert!(!entity.has_every_component::<(Position,)>());
+
+        entity.set_component(Position(7));
+        assert!(entity.has_every_component::<(Position,)>());
+        assert_eq!(entity.get_components::<(Position,)>(), Some((&Position(7),)));
+    }
+
+    #[test]
+    fn component_set_has_some_and_has_every() {
+        let mut entity = Entity::new::<MarkerA>();
+        assert!(!entity.has_some_components::<(Position, Velocity)>());
+        assert!(!entity.has_every_component::<(Position, Velocity)>());
+
+        entity.set_component(Position(1));
+        assert!(entity.has_some_components::<(Position, Velocity)>());
+        assert!(!entity.has_every_component::<(Position, Velocity)>());
+
+        entity.set_component(Velocity(2));
+        assert!(entity.has_every_component::<(Position, Velocity)>());
+    }
+
+    #[test]
+    fn component_set_three_tuple() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.set_component(Velocity(2));
+        entity.set_component(Health(3));
+
+        assert!(entity.has_every_component::<(Position, Velocity, Health)>());
+        let (p, v, h) = entity.get_components::<(Position, Velocity, Health)>().unwrap();
+        assert_eq!((p, v, h), (&Position(1), &Velocity(2), &Health(3)));
+    }
+
+    #[test]
+    fn get_components_tuple() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.set_component(Velocity(2));
+
+        let (position, velocity) = entity.get_components::<(Position, Velocity)>().unwrap();
+        assert_eq!(position, &Position(1));
+        assert_eq!(velocity, &Velocity(2));
+    }
+
+    #[test]
+    fn get_components_none_when_missing_one() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        assert!(entity.get_components::<(Position, Velocity)>().is_none());
+    }
+
+    #[test]
+    fn read_component_marks_as_read_for_that_system_only() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+
+        let system_a = TypeId::of::<MarkerA>();
+        let system_b = TypeId::of::<MarkerB>();
+
+        assert!(!entity.is_component_read::<Position>(system_a));
+        assert!(entity.has_unread_component::<Position>(system_a));
+        assert!(!entity.has_read_component::<Position>(system_a));
+
+        assert_eq!(entity.read_component::<Position>(system_a), Some(&Position(1)));
+
+        assert!(entity.is_component_read::<Position>(system_a));
+        assert!(entity.has_read_component::<Position>(system_a));
+        assert!(!entity.has_unread_component::<Position>(system_a));
+
+        assert!(!entity.is_component_read::<Position>(system_b));
+        assert!(entity.has_unread_component::<Position>(system_b));
+    }
+
+    #[test]
+    fn read_component_returns_none_when_missing() {
+        let entity = Entity::new::<MarkerA>();
+        assert!(entity.read_component::<Position>(TypeId::of::<MarkerA>()).is_none());
+    }
+
+    #[test]
+    fn read_components_tuple_marks_all_as_read() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.set_component(Velocity(2));
+        let system_id = TypeId::of::<MarkerA>();
+
+        assert!(!entity.has_every_read_component::<(Position, Velocity)>(system_id));
+        assert!(entity.read_components::<(Position, Velocity)>(system_id).is_some());
+        assert!(entity.has_every_read_component::<(Position, Velocity)>(system_id));
+    }
+
+    #[test]
+    fn read_components_none_when_one_missing() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        let system_id = TypeId::of::<MarkerA>();
+        assert!(entity.read_components::<(Position, Velocity)>(system_id).is_none());
+    }
+
+    #[test]
+    fn has_some_and_every_read_unread_component_sets() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.set_component(Velocity(2));
+        let system_id = TypeId::of::<MarkerA>();
+
+        assert!(entity.has_every_unread_component::<(Position, Velocity)>(system_id));
+        assert!(!entity.has_some_read_components::<(Position, Velocity)>(system_id));
+
+        entity.read_component::<Position>(system_id);
+
+        assert!(entity.has_some_read_components::<(Position, Velocity)>(system_id));
+        assert!(!entity.has_every_read_component::<(Position, Velocity)>(system_id));
+        assert!(entity.has_some_unread_components::<(Position, Velocity)>(system_id));
+        assert!(!entity.has_every_unread_component::<(Position, Velocity)>(system_id));
+    }
+
+    #[test]
+    fn context_roundtrip() {
+        let mut entity = Entity::new::<MarkerA>();
+        assert!(entity.get_context::<Ctx>().is_none());
+
+        entity.set_context(Ctx(5));
+        assert_eq!(entity.get_context::<Ctx>().unwrap().0, 5);
+
+        entity.get_context_mut::<Ctx>().unwrap().0 = 6;
+        assert_eq!(entity.get_context::<Ctx>().unwrap().0, 6);
+
+        entity.clear_context();
+        assert!(entity.get_context::<Ctx>().is_none());
+    }
+
+    #[test]
+    fn queued_component_ops_are_invisible_until_commit() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.queue_set_component(Position(1));
+        assert!(entity.get_component::<Position>().is_none());
+
+        assert!(!entity.commit());
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(1)));
+    }
+
+    #[test]
+    fn queued_unset_component_applies_on_commit() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.queue_unset_component::<Position>();
+        assert!(entity.get_component::<Position>().is_some());
+
+        entity.commit();
+        assert!(entity.get_component::<Position>().is_none());
+    }
+
+    #[test]
+    fn queued_ops_apply_in_queue_order() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.queue_set_component(Position(1));
+        entity.queue_set_component(Position(2));
+        entity.queue_unset_component::<Position>();
+        entity.queue_set_component(Position(3));
+
+        entity.commit();
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(3)));
+    }
+
+    #[test]
+    fn queued_set_component_resets_read_tracking() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        let system_id = TypeId::of::<MarkerA>();
+        entity.read_component::<Position>(system_id);
+        assert!(entity.is_component_read::<Position>(system_id));
+
+        entity.queue_set_component(Position(2));
+        entity.commit();
+
+        assert!(!entity.is_component_read::<Position>(system_id));
+    }
+
+    #[test]
+    fn queued_context_ops_apply_on_commit() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.queue_set_context(Ctx(1));
+        assert!(entity.get_context::<Ctx>().is_none());
+
+        entity.commit();
+        assert_eq!(entity.get_context::<Ctx>().unwrap().0, 1);
+
+        entity.queue_clear_context();
+        entity.commit();
+        assert!(entity.get_context::<Ctx>().is_none());
+    }
+
+    #[test]
+    fn queue_despawn_flags_commit_result() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.queue_despawn();
+
+        assert!(entity.commit());
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(1)));
+    }
+
+    #[test]
+    fn commit_with_no_pending_ops_is_a_noop() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        assert!(!entity.commit());
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(1)));
+    }
+
+    #[test]
+    fn commit_drains_the_queue_so_it_does_not_reapply() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.queue_set_component(Position(1));
+        entity.commit();
+        entity.unset_component::<Position>();
+        entity.commit();
+        assert!(entity.get_component::<Position>().is_none());
+    }
+
+    #[test]
+    fn check_context_wraps_entity_queries() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        let system_id = TypeId::of::<MarkerA>();
+        let ctx = CheckContext::new(system_id);
+
+        assert_eq!(ctx.get_id(), system_id);
+        assert!(ctx.has_component::<Position>(&entity));
+        assert!(!ctx.has_component::<Velocity>(&entity));
+        assert!(ctx.has_unread_component::<Position>(&entity));
+        assert!(!ctx.has_read_component::<Position>(&entity));
+        assert!(!ctx.is_component_read::<Position>(&entity));
+        assert_eq!(ctx.get_component::<Position>(&entity), Some(&Position(1)));
+        assert!(ctx.has_some_components::<(Position, Velocity)>(&entity));
+        assert!(!ctx.has_every_component::<(Position, Velocity)>(&entity));
+        assert!(!ctx.has_some_read_components::<(Position, Velocity)>(&entity));
+        assert!(!ctx.has_every_read_component::<(Position, Velocity)>(&entity));
+        assert!(ctx.has_some_unread_components::<(Position, Velocity)>(&entity));
+        assert!(!ctx.has_every_unread_component::<(Position, Velocity)>(&entity));
+        assert!(ctx.get_components::<(Position, Velocity)>(&entity).is_none());
+
+        entity.set_component(Velocity(2));
+        assert!(ctx.has_every_component::<(Position, Velocity)>(&entity));
+        assert!(ctx.get_components::<(Position, Velocity)>(&entity).is_some());
+    }
+
+    #[test]
+    fn action_context_get_and_read_component() {
+        let mut entity = Entity::new::<MarkerA>();
+        entity.set_component(Position(1));
+        entity.set_component(Velocity(2));
+        let queue: Mutex<Vec<(TypeId, Entity)>> = Mutex::new(Vec::new());
+        let system_id = TypeId::of::<MarkerA>();
+        let ctx = ActionContext::new(system_id, &queue);
+
+        assert_eq!(ctx.get_id(), system_id);
+        assert_eq!(ctx.get_component::<Position>(&entity), Some(&Position(1)));
+        assert!(ctx.get_components::<(Position, Velocity)>(&entity).is_some());
+
+        assert!(!entity.is_component_read::<Position>(system_id));
+        assert_eq!(ctx.read_component::<Position>(&entity), Some(&Position(1)));
+        assert!(entity.is_component_read::<Position>(system_id));
+
+        assert!(ctx.read_components::<(Position, Velocity)>(&entity).is_some());
+    }
+
+    #[test]
+    fn action_context_set_and_unset_component_are_queued_not_immediate() {
+        let mut entity = Entity::new::<MarkerA>();
+        let queue: Mutex<Vec<(TypeId, Entity)>> = Mutex::new(Vec::new());
+        let system_id = TypeId::of::<MarkerA>();
+
+        ActionContext::new(system_id, &queue).set_component(&entity, Position(1));
+        assert!(entity.get_component::<Position>().is_none());
+
+        entity.commit();
+        assert_eq!(entity.get_component::<Position>(), Some(&Position(1)));
+
+        ActionContext::new(system_id, &queue).unset_component::<Position>(&entity);
+        assert!(entity.get_component::<Position>().is_some());
+
+        entity.commit();
+        assert!(entity.get_component::<Position>().is_none());
+    }
+
+    #[test]
+    fn action_context_set_and_clear_context_are_queued() {
+        let mut entity = Entity::new::<MarkerA>();
+        let queue: Mutex<Vec<(TypeId, Entity)>> = Mutex::new(Vec::new());
+        let system_id = TypeId::of::<MarkerA>();
+
+        ActionContext::new(system_id, &queue).set_context(&entity, Ctx(9));
+        assert!(entity.get_context::<Ctx>().is_none());
+
+        entity.commit();
+        assert_eq!(entity.get_context::<Ctx>().unwrap().0, 9);
+
+        ActionContext::new(system_id, &queue).clear_context(&entity);
+        assert!(entity.get_context::<Ctx>().is_some());
+
+        entity.commit();
+        assert!(entity.get_context::<Ctx>().is_none());
+    }
+
+    #[test]
+    fn action_context_despawn_is_queued() {
+        let mut entity = Entity::new::<MarkerA>();
+        let queue: Mutex<Vec<(TypeId, Entity)>> = Mutex::new(Vec::new());
+        let system_id = TypeId::of::<MarkerA>();
+
+        ActionContext::new(system_id, &queue).despawn(&entity);
+        assert!(entity.commit());
+    }
+
+    #[test]
+    fn action_context_spawn_queues_a_new_entity_and_returns_its_id() {
+        let queue: Mutex<Vec<(TypeId, Entity)>> = Mutex::new(Vec::new());
+        let ctx = ActionContext::new(TypeId::of::<MarkerA>(), &queue);
+
+        let id = ctx.spawn::<MarkerB>(|entity| {
+            entity.set_component(Position(42));
+        });
+
+        let queued = queue.into_inner().unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].0, TypeId::of::<MarkerB>());
+        assert_eq!(queued[0].1.get_id(), id);
+        assert_eq!(queued[0].1.get_component::<Position>(), Some(&Position(42)));
+    }
+}

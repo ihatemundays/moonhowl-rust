@@ -28,7 +28,7 @@ impl ISystem for MovementLogger {
         system.has_every_unread_component::<(Position, Velocity)>(entity)
     }
 
-    fn and_then(&self, system: &ActionContext, entity: &Entity) {
+    fn and_then(&self, system: &ActionContext<'_>, entity: &Entity) {
         let Some((position, velocity)) = system.read_components::<(Position, Velocity)>(entity)
         else {
             return;
@@ -66,4 +66,5 @@ fn main() {
     // stationary is skipped: it has no Velocity, so MovementLogger::check
     // never passes for it.
     world.run();
+    world.confirm();
 }
