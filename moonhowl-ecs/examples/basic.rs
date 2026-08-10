@@ -1,19 +1,13 @@
-use moonhowl_ecs::{ActionContext, CheckContext, Entity, IComponent, ISystem, World};
-use moonhowl_macros::ecs_component;
-use std::any::Any;
+use moonhowl_ecs::{ActionContext, CheckContext, Entity, ISystem, World};
+use moonhowl_macros::Component;
 
+#[derive(Component)]
 struct Position {
     x: f32,
     y: f32,
 }
 
-impl IComponent for Position {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-#[ecs_component]
+#[derive(Component)]
 struct Velocity {
     dx: f32,
     dy: f32,

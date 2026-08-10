@@ -205,6 +205,60 @@ impl World {
         }
     }
 
+    pub fn run_max_parallel(&mut self) {
+        let Self {
+            entities,
+            systems,
+            spawn_queue,
+        } = self;
+        let spawn_queue: &Mutex<Vec<(TypeId, Entity)>> = &*spawn_queue;
+
+        thread::scope(|scope| {
+            for (type_id, bucket) in entities.iter_mut() {
+                let Some(matching_systems) = systems.get(type_id) else {
+                    continue;
+                };
+
+                for entity in bucket.values_mut() {
+                    scope.spawn(move || Self::run_entity(entity, matching_systems, spawn_queue));
+                }
+            }
+        });
+    }
+
+    pub fn run_chunked(&mut self) {
+        let Self {
+            entities,
+            systems,
+            spawn_queue,
+        } = self;
+        let spawn_queue: &Mutex<Vec<(TypeId, Entity)>> = &*spawn_queue;
+        let parallelism = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+
+        let mut work: Vec<(&[(TypeId, Box<dyn ISystem>)], Vec<&mut Entity>)> = entities
+            .iter_mut()
+            .filter_map(|(type_id, bucket)| {
+                let matching_systems = systems.get(type_id)?;
+                Some((matching_systems.as_slice(), bucket.values_mut().collect()))
+            })
+            .collect();
+
+        thread::scope(|scope| {
+            for (matching_systems, entity_refs) in &mut work {
+                let matching_systems: &[(TypeId, Box<dyn ISystem>)] = matching_systems;
+                let chunk_size = entity_refs.len().div_ceil(parallelism).max(1);
+
+                for chunk in entity_refs.chunks_mut(chunk_size) {
+                    scope.spawn(move || {
+                        for entity in chunk {
+                            Self::run_entity(entity, matching_systems, spawn_queue);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
     /// Applies every component/context/despawn/spawn operation queued via
     /// [`ActionContext`] since the last call to `confirm`.
     pub fn confirm(&mut self) {
@@ -224,15 +278,22 @@ impl World {
         spawn_queue: &Mutex<Vec<(TypeId, Entity)>>,
     ) {
         for entity in bucket.values_mut() {
-            let mut passed: Vec<&(TypeId, Box<dyn ISystem>)> =
-                Vec::with_capacity(matching_systems.len());
-            passed.extend(matching_systems.iter().filter(|(system_id, system_impl)| {
-                system_impl.check(&CheckContext::new(*system_id), entity)
-            }));
+            Self::run_entity(entity, matching_systems, spawn_queue);
+        }
+    }
 
-            for (system_id, system_impl) in passed {
-                system_impl.and_then(&ActionContext::new(*system_id, spawn_queue), entity);
-            }
+    fn run_entity(
+        entity: &mut Entity,
+        matching_systems: &[(TypeId, Box<dyn ISystem>)],
+        spawn_queue: &Mutex<Vec<(TypeId, Entity)>>,
+    ) {
+        let mut passed: Vec<&(TypeId, Box<dyn ISystem>)> = Vec::with_capacity(matching_systems.len());
+        passed.extend(matching_systems.iter().filter(|(system_id, system_impl)| {
+            system_impl.check(&CheckContext::new(*system_id), entity)
+        }));
+
+        for (system_id, system_impl) in passed {
+            system_impl.and_then(&ActionContext::new(*system_id, spawn_queue), entity);
         }
     }
 
@@ -486,6 +547,8 @@ mod tests {
         world.run();
         world.run_sync();
         world.run_checked_sync();
+        world.run_max_parallel();
+        world.run_chunked();
         world.confirm();
         assert!(world.is_empty());
     }
@@ -526,6 +589,60 @@ mod tests {
         assert_eq!(
             world.get_entity::<Movable>(id).unwrap().get_component::<Velocity>(),
             Some(&Velocity(8))
+        );
+    }
+
+    #[test]
+    fn run_max_parallel_applies_same_result_as_run_sync() {
+        let mut world = World::new();
+        for i in 0..37 {
+            let id = world.spawn::<Movable>();
+            world.get_entity_mut::<Movable>(id).unwrap().set_component(Position(i));
+        }
+        world.register_system::<Movable, _>(AddVelocitySystem);
+
+        world.run_max_parallel();
+        world.confirm();
+
+        for entity in world.iter::<Movable>() {
+            let position = entity.get_component::<Position>().unwrap().0;
+            assert_eq!(entity.get_component::<Velocity>(), Some(&Velocity(position * 2)));
+        }
+    }
+
+    #[test]
+    fn run_chunked_applies_same_result_as_run_sync() {
+        let mut world = World::new();
+        for i in 0..37 {
+            let id = world.spawn::<Movable>();
+            world.get_entity_mut::<Movable>(id).unwrap().set_component(Position(i));
+        }
+        world.register_system::<Movable, _>(AddVelocitySystem);
+
+        world.run_chunked();
+        world.confirm();
+
+        for entity in world.iter::<Movable>() {
+            let position = entity.get_component::<Position>().unwrap().0;
+            assert_eq!(entity.get_component::<Velocity>(), Some(&Velocity(position * 2)));
+        }
+    }
+
+    #[test]
+    fn run_chunked_respects_registration_order() {
+        let mut world = World::new();
+        let id = world.spawn::<Movable>();
+        world.get_entity_mut::<Movable>(id).unwrap().set_component(Position(1));
+
+        world.register_system::<Movable, _>(SetHealthToOneSystem);
+        world.register_system::<Movable, _>(SetHealthToTwoSystem);
+
+        world.run_chunked();
+        world.confirm();
+
+        assert_eq!(
+            world.get_entity::<Movable>(id).unwrap().get_component::<Health>(),
+            Some(&Health(2))
         );
     }
 

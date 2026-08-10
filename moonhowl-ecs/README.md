@@ -70,13 +70,17 @@ Each component tracks, per system, whether that system has called `read_componen
 
 ## Running systems
 
-`World` has three ways to run all registered systems over all entities:
+`World` has five ways to run all registered systems over all entities:
 
-- **`run()`** — one thread per marker type; both `check` and `and_then` run on that thread.
 - **`run_sync()`** — everything runs on the calling thread.
+- **`run()`** — one thread per marker type; both `check` and `and_then` run on that thread.
+- **`run_chunked()`** — like `run`, but splits each marker type's entities into `std::thread::available_parallelism()` chunks and runs one thread per chunk, so a single marker type with many entities still uses every core instead of leaving them idle.
 - **`run_checked_sync()`** — `check` runs one thread per marker type (like `run`), but every `and_then` call happens afterward on the calling thread. Use this when `and_then` needs to run on a specific thread (e.g. the main thread, for anything not `Sync`) while still parallelizing the read-only `check` phase.
+- **`run_max_parallel()`** — one OS thread per *entity*. Included for completeness, not recommended: `thread::scope`'s `spawn` is a real OS thread (tens of microseconds to create and join), not a green thread, so this is dominated by thread-spawn overhead outside of tiny entity counts. `examples/bench_parallelism.rs` measures this concretely — at 1,000 entities it's roughly 180x slower than `run_sync` on the machine it was measured on. `run_chunked` gets the same "use every core" benefit without the oversubscription cost.
 
-All three execute checks and actions in the same order: for a given entity, systems run in **registration order** (the order `register_system` was first called for that marker type — re-registering an existing system keeps its original slot).
+All five execute checks and actions in the same order: for a given entity, systems run in **registration order** (the order `register_system` was first called for that marker type — re-registering an existing system keeps its original slot).
+
+Run `cargo run --release --example bench_parallelism` to compare all five on your own machine and entity counts.
 
 ## Queued mutations
 
