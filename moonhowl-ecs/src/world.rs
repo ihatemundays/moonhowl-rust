@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread;
 
+/// Owns every entity (grouped by marker type) and every registered system.
 #[derive(Default)]
 pub struct World {
     entities: HashMap<TypeId, HashMap<usize, Entity>>,
@@ -13,10 +14,12 @@ pub struct World {
 }
 
 impl World {
+    /// Creates an empty world.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Creates a new `M`-tagged entity with no components and returns its id.
     pub fn spawn<M: 'static>(&mut self) -> usize {
         let entity = Entity::new::<M>();
         let id = entity.get_id();
@@ -27,36 +30,44 @@ impl World {
         id
     }
 
+    /// Removes and returns the `M`-tagged entity with the given id, if any.
     pub fn despawn<M: 'static>(&mut self, id: usize) -> Option<Entity> {
         self.entities.get_mut(&TypeId::of::<M>())?.remove(&id)
     }
 
+    /// Removes every entity of every marker type.
     pub fn despawn_all(&mut self) {
         self.entities.clear();
     }
 
+    /// Whether an `M`-tagged entity with the given id exists.
     pub fn contains<M: 'static>(&self, id: usize) -> bool {
         self.entities
             .get(&TypeId::of::<M>())
             .is_some_and(|bucket| bucket.contains_key(&id))
     }
 
+    /// Returns the `M`-tagged entity with the given id, if any.
     pub fn get_entity<M: 'static>(&self, id: usize) -> Option<&Entity> {
         self.entities.get(&TypeId::of::<M>())?.get(&id)
     }
 
+    /// Mutable version of [`Self::get_entity`].
     pub fn get_entity_mut<M: 'static>(&mut self, id: usize) -> Option<&mut Entity> {
         self.entities.get_mut(&TypeId::of::<M>())?.get_mut(&id)
     }
 
+    /// The total number of entities across every marker type.
     pub fn len(&self) -> usize {
         self.entities.values().map(HashMap::len).sum()
     }
 
+    /// Whether the world has no entities.
     pub fn is_empty(&self) -> bool {
         self.entities.values().all(HashMap::is_empty)
     }
 
+    /// Iterates over every `M`-tagged entity.
     pub fn iter<M: 'static>(&self) -> impl Iterator<Item = &Entity> {
         self.entities
             .get(&TypeId::of::<M>())
@@ -64,6 +75,10 @@ impl World {
             .flat_map(|bucket| bucket.values())
     }
 
+    /// Registers `system` to run against `M`-tagged entities. Returns `true`
+    /// if it replaced an already-registered `S`, keeping that system's
+    /// original registration order; `false` if it was newly registered
+    /// (appended after every other system already registered for `M`).
     pub fn register_system<M: 'static, S: ISystem + 'static>(&mut self, system: S) -> bool {
         let system_id = TypeId::of::<S>();
         let wrapper: Box<dyn ISystem> = Box::new(system);
@@ -79,6 +94,8 @@ impl World {
         }
     }
 
+    /// Deregisters the `S` system from `M`-tagged entities. Returns `false`
+    /// if it wasn't registered.
     pub fn deregister_system<M: 'static, S: 'static>(&mut self) -> bool {
         let Some(bucket) = self.systems.get_mut(&TypeId::of::<M>()) else {
             return false;
@@ -93,15 +110,19 @@ impl World {
         true
     }
 
+    /// Deregisters every system for every marker type.
     pub fn deregister_all_systems(&mut self) {
         self.systems.clear();
     }
 
+    /// Equivalent to [`Self::despawn_all`] followed by [`Self::deregister_all_systems`].
     pub fn reset(&mut self) {
         self.despawn_all();
         self.deregister_all_systems();
     }
 
+    /// Runs `check` then `and_then` for every entity, one thread per marker
+    /// type. Queued mutations aren't applied until [`Self::confirm`] is called.
     pub fn run(&mut self) {
         let Self {
             entities,
@@ -121,6 +142,7 @@ impl World {
         });
     }
 
+    /// Like [`Self::run`], but everything runs on the calling thread.
     pub fn run_sync(&mut self) {
         let Self {
             entities,
@@ -138,6 +160,9 @@ impl World {
         }
     }
 
+    /// Like [`Self::run`], but `check` runs one thread per marker type while
+    /// every `and_then` call happens afterward on the calling thread, in
+    /// system registration order per entity.
     pub fn run_checked_sync(&mut self) {
         let Self {
             entities,
@@ -180,6 +205,8 @@ impl World {
         }
     }
 
+    /// Applies every component/context/despawn/spawn operation queued via
+    /// [`ActionContext`] since the last call to `confirm`.
     pub fn confirm(&mut self) {
         for bucket in self.entities.values_mut() {
             bucket.retain(|_, entity| !entity.commit());

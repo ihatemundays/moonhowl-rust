@@ -17,6 +17,8 @@ enum PendingOp {
     Despawn,
 }
 
+/// An object tagged with a marker type `M`, holding typed components and a
+/// single opaque context value.
 pub struct Entity {
     id: usize,
     components: HashMap<TypeId, ComponentEntry>,
@@ -25,6 +27,8 @@ pub struct Entity {
 }
 
 impl Entity {
+    /// Creates a new entity with an id unique among entities created with
+    /// the same marker type `M`.
     pub fn new<M: 'static>() -> Self {
         Self {
             id: Self::get_new_id::<M>(),
@@ -46,6 +50,7 @@ impl Entity {
             .fetch_add(1, Ordering::Relaxed)
     }
 
+    /// The id this entity was assigned, unique among entities of its marker type.
     pub fn get_id(&self) -> usize {
         self.id
     }
@@ -109,16 +114,19 @@ impl Entity {
         T::read_every(self, system_id)
     }
 
+    /// Returns the entity's `T` component, if it has one.
     pub fn get_component<T: IComponent>(&self) -> Option<&T> {
         self.components
             .get(&TypeId::of::<T>())
             .and_then(|entry| entry.component.as_any().downcast_ref::<T>())
     }
 
+    /// Returns every component in the tuple `T`, or `None` if any are missing.
     pub fn get_components<T: ComponentSet>(&self) -> Option<T::Refs<'_>> {
         T::get_every(self)
     }
 
+    /// Sets (inserting or overwriting) the entity's `T` component immediately.
     pub fn set_component<T: IComponent>(&mut self, component: T) -> &mut Self {
         self.components.insert(
             TypeId::of::<T>(),
@@ -130,6 +138,7 @@ impl Entity {
         self
     }
 
+    /// Removes the entity's `T` component immediately, if present.
     pub fn unset_component<T: IComponent>(&mut self) -> &mut Self {
         self.components.remove(&TypeId::of::<T>());
         self
@@ -196,25 +205,36 @@ impl Entity {
         despawn
     }
 
+    /// Sets the entity's context value immediately, replacing any existing one.
     pub fn set_context<C: Any + Send>(&mut self, context: C) -> &mut Self {
         self.context = Some(Box::new(context));
         self
     }
 
+    /// Returns the entity's context value, if it has one of type `C`.
     pub fn get_context<C: Any + Send>(&self) -> Option<&C> {
         self.context.as_deref()?.downcast_ref::<C>()
     }
 
+    /// Mutable version of [`Self::get_context`].
     pub fn get_context_mut<C: Any + Send>(&mut self) -> Option<&mut C> {
         self.context.as_deref_mut()?.downcast_mut::<C>()
     }
 
+    /// Clears the entity's context value immediately, if it has one.
     pub fn clear_context(&mut self) -> &mut Self {
         self.context = None;
         self
     }
 }
 
+/// Read-only view passed to [`ISystem::check`](crate::ISystem::check),
+/// scoped to the currently running system's id.
+///
+/// The "read"/"unread" queries track, per component per system, whether the
+/// *current* system has called `read_component`/`read_components` (via
+/// [`ActionContext`]) on that component before, letting a system tell
+/// components it has already processed apart from ones it hasn't.
 pub struct CheckContext(TypeId);
 
 impl CheckContext {
@@ -222,59 +242,86 @@ impl CheckContext {
         Self(system_id)
     }
 
+    /// The id of the system this context was created for.
     pub fn get_id(&self) -> TypeId {
         self.0
     }
 
+    /// Whether the entity has a `T` component.
     pub fn has_component<T: IComponent>(&self, entity: &Entity) -> bool {
         entity.has_component::<T>()
     }
 
+    /// Whether this system has read the entity's `T` component before.
     pub fn is_component_read<T: IComponent>(&self, entity: &Entity) -> bool {
         entity.is_component_read::<T>(self.0)
     }
 
+    /// Equivalent to [`Self::is_component_read`].
     pub fn has_read_component<T: IComponent>(&self, entity: &Entity) -> bool {
         entity.has_read_component::<T>(self.0)
     }
 
+    /// Whether the entity has a `T` component this system hasn't read yet.
     pub fn has_unread_component<T: IComponent>(&self, entity: &Entity) -> bool {
         entity.has_unread_component::<T>(self.0)
     }
 
+    /// Returns the entity's `T` component without marking it as read.
     pub fn get_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
         entity.get_component()
     }
 
+    /// Returns every component in the tuple `T` without marking any as read.
     pub fn get_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
         entity.get_components::<T>()
     }
 
+    /// Whether the entity has at least one component from the tuple `T`.
     pub fn has_some_components<T: ComponentSet>(&self, entity: &Entity) -> bool {
         entity.has_some_components::<T>()
     }
 
+    /// Whether the entity has every component in the tuple `T`.
     pub fn has_every_component<T: ComponentSet>(&self, entity: &Entity) -> bool {
         entity.has_every_component::<T>()
     }
 
+    /// Whether this system has read at least one component from `T`.
     pub fn has_some_read_components<T: ComponentSet>(&self, entity: &Entity) -> bool {
         entity.has_some_read_components::<T>(self.0)
     }
 
+    /// Whether this system has read every component in `T`.
     pub fn has_every_read_component<T: ComponentSet>(&self, entity: &Entity) -> bool {
         entity.has_every_read_component::<T>(self.0)
     }
 
+    /// Whether the entity has at least one component from `T` this system hasn't read.
     pub fn has_some_unread_components<T: ComponentSet>(&self, entity: &Entity) -> bool {
         entity.has_some_unread_components::<T>(self.0)
     }
 
+    /// Whether every component from `T` the entity has is unread by this system.
     pub fn has_every_unread_component<T: ComponentSet>(&self, entity: &Entity) -> bool {
         entity.has_every_unread_component::<T>(self.0)
     }
 }
 
+/// Mutable-intent view passed to
+/// [`ISystem::and_then`](crate::ISystem::and_then), scoped to the currently
+/// running system's id.
+///
+/// `get_component`/`get_components` read without marking anything as read.
+/// `read_component`/`read_components` mark the component as read by this
+/// system, which [`CheckContext`]'s read/unread queries observe on
+/// subsequent runs. `set_component`, `unset_component`, `set_context`,
+/// `clear_context`, `despawn`, and `spawn` are all queued: none of their
+/// effects are visible (on the entity, or in the case of `spawn`, in the
+/// [`World`](crate::World)) until
+/// [`World::confirm`](crate::World::confirm) is called. Queued operations on
+/// a given entity are applied in the order the systems touching it ran,
+/// i.e. system registration order.
 pub struct ActionContext<'w> {
     system_id: TypeId,
     spawn_queue: &'w Mutex<Vec<(TypeId, Entity)>>,
@@ -288,46 +335,59 @@ impl<'w> ActionContext<'w> {
         }
     }
 
+    /// The id of the system this context was created for.
     pub fn get_id(&self) -> TypeId {
         self.system_id
     }
 
+    /// Returns the entity's `T` component without marking it as read.
     pub fn get_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
         entity.get_component()
     }
 
+    /// Returns every component in the tuple `T` without marking any as read.
     pub fn get_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
         entity.get_components::<T>()
     }
 
+    /// Returns the entity's `T` component, marking it as read by this system.
     pub fn read_component<'e, T: IComponent>(&self, entity: &'e Entity) -> Option<&'e T> {
         entity.read_component::<T>(self.system_id)
     }
 
+    /// Returns every component in the tuple `T`, marking each as read by this system.
     pub fn read_components<'e, T: ComponentSet>(&self, entity: &'e Entity) -> Option<T::Refs<'e>> {
         entity.read_components::<T>(self.system_id)
     }
 
+    /// Queues `entity`'s `T` component to be set (inserted or overwritten).
     pub fn set_component<T: IComponent>(&self, entity: &Entity, component: T) {
         entity.queue_set_component(component);
     }
 
+    /// Queues `entity`'s `T` component to be removed.
     pub fn unset_component<T: IComponent>(&self, entity: &Entity) {
         entity.queue_unset_component::<T>();
     }
 
+    /// Queues `entity`'s context value to be set, replacing any existing one.
     pub fn set_context<C: Any + Send>(&self, entity: &Entity, context: C) {
         entity.queue_set_context(context);
     }
 
+    /// Queues `entity`'s context value to be cleared.
     pub fn clear_context(&self, entity: &Entity) {
         entity.queue_clear_context();
     }
 
+    /// Queues `entity` to be removed from the world. It stays visible to
+    /// other systems for the rest of the current run.
     pub fn despawn(&self, entity: &Entity) {
         entity.queue_despawn();
     }
 
+    /// Builds (via `build`) and queues a new `M`-tagged entity for insertion.
+    /// Returns the id it will be inserted under.
     pub fn spawn<M: 'static>(&self, build: impl FnOnce(&mut Entity)) -> usize {
         let mut entity = Entity::new::<M>();
         build(&mut entity);
@@ -337,6 +397,8 @@ impl<'w> ActionContext<'w> {
     }
 }
 
+/// Implemented for tuples of up to 8 [`IComponent`] types, enabling
+/// multi-component queries like `get_components::<(A, B)>()`.
 pub trait ComponentSet {
     type Refs<'a>;
 
