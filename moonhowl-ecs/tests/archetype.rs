@@ -111,3 +111,17 @@ fn tuple_archetype_mutation_misses_without_running_when_a_component_is_absent() 
     assert_eq!(result, None);
     assert!(!ran);
 }
+
+#[test]
+fn edit_component_mutates_in_place_and_is_a_noop_when_absent() {
+    let mut entity = Entity::new();
+    entity.set_component(Position { x: 1.0, y: 2.0 });
+
+    entity
+        .edit_component::<Position>(|pos| pos.x += 1.0)
+        .edit_component::<Velocity>(|vel| vel.dx += 1.0);
+
+    let x = entity.with_archetype::<Position, _>(|pos| pos.x);
+    assert_eq!(x, Some(2.0));
+    assert!(!entity.has_component::<Velocity>());
+}

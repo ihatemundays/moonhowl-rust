@@ -2,15 +2,36 @@ use crate::archetype::Archetype;
 use crate::component::Component;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+#[derive(Default)]
+struct FxHasher(u64);
+
+impl Hasher for FxHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    
+    fn write(&mut self, bytes: &[u8]) {
+        const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+        for chunk in bytes.chunks(8) {
+            let mut buf = [0u8; 8];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_ne_bytes(buf)).wrapping_mul(SEED);
+        }
+    }
+}
+
+type ComponentMap = HashMap<TypeId, Box<dyn Component>, BuildHasherDefault<FxHasher>>;
 
 pub struct Entity {
-    components: HashMap<TypeId, Box<dyn Component>>,
+    components: ComponentMap,
 }
 
 impl Entity {
     pub fn new() -> Self {
         Self {
-            components: HashMap::new(),
+            components: ComponentMap::default(),
         }
     }
 
@@ -44,6 +65,13 @@ impl Entity {
 
     pub fn unset_component<T: Component>(&mut self) -> &mut Self {
         self.components.remove(&TypeId::of::<T>());
+        self
+    }
+
+    pub fn edit_component<T: Component>(&mut self, f: impl FnOnce(&mut T)) -> &mut Self {
+        if let Some(component) = self.get_component_mut::<T>() {
+            f(component);
+        }
         self
     }
 
