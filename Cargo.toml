@@ -1,11 +1,7 @@
 [workspace]
-resolver = "2"
-
-members = [
-    "moonhowl-ecs"
-]
+members = ["moonhowl-ecs"]
 
 [package]
 name = "moonhowl_rust"
 version = "0.2.0"
-rust-version = "1.97"
+edition = "2024"
