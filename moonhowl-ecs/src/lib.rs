@@ -1,7 +1,7 @@
+mod archetype;
 mod component;
 mod entity;
-mod system;
 
-pub use component::IComponent;
+pub use archetype::Archetype;
+pub use component::Component;
 pub use entity::Entity;
-pub use system::{System, SystemCheck};
