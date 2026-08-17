@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
 members = [
-    "moonhowl-ecs",
-    "moonhowl-macros"
+    "moonhowl-ecs"
 ]
