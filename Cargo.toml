@@ -1,7 +1,7 @@
-[workspace]
-members = ["moonhowl-ecs"]
-
 [package]
-name = "moonhowl_rust"
+name = "moonhowl-rust"
 version = "0.2.0"
 edition = "2024"
+
+[workspace]
+members = ["moonhowl-ecs"]
