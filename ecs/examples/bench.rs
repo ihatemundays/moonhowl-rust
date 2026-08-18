@@ -1,4 +1,4 @@
-use moonhowl_ecs::{Component, Entity};
+use ecs::{Component, Entity};
 use std::hint::black_box;
 use std::time::Instant;
 
