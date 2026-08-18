@@ -1,4 +1,4 @@
-use util_godot::throttle;
+use util::throttle;
 
 fn tick_a(delta: f64) -> bool {
     throttle!(delta, 1.0)
