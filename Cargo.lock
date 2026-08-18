@@ -7,5 +7,5 @@ name = "ecs"
 version = "0.2.1"
 
 [[package]]
-name = "util-godot"
+name = "util"
 version = "0.1.0"
