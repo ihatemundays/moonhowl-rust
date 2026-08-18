@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "ecs"
+name = "moonhowl-ecs"
 version = "0.2.0"
