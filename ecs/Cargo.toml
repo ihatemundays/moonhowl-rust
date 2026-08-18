@@ -1,4 +1,4 @@
 [package]
-name = "moonhowl-ecs"
+name = "ecs"
 version = "0.2.0"
 edition = "2024"
