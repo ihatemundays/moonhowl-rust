@@ -1,7 +1,7 @@
 # ecs
 
 A tiny, zero-dependency component store for a single `Entity`, with type-safe
-multi-component access ("archetypes"). No `World`, no scheduler, no systems —
+multi-component access ("archetypes"). No `World`, no scheduler, systems via lambdas —
 just a fast place to hang typed data off an object and fetch several pieces
 of it at once.
 
