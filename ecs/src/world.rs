@@ -115,13 +115,6 @@ impl World {
         self.store::<T>().is_some_and(|store| store.contains(entity))
     }
 
-    pub fn edit_component<T: Component>(&mut self, entity: Entity, f: impl FnOnce(&mut T)) -> &mut Self {
-        if let Some(component) = self.component_mut::<T>(entity) {
-            f(component);
-        }
-        self
-    }
-
     pub fn get<A: Archetype>(&self, entity: Entity) -> Option<A::Ref<'_>> {
         A::fetch(self, entity)
     }

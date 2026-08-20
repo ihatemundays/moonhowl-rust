@@ -73,8 +73,11 @@ variants.
 - `has_component::<T>(Entity) -> bool`
 - `set_component::<T>(Entity, T) -> &mut Self` — insert or overwrite; chainable.
 - `unset_component::<T>(Entity) -> &mut Self` — remove if present; chainable.
-- `edit_component::<T>(Entity, f: FnOnce(&mut T)) -> &mut Self` — mutate in
-  place, no-op if absent; chainable.
+
+To mutate a component in place, use `get_mut::<T>` below — `if let Some(c) =
+world.get_mut::<T>(entity) { ... }` — rather than a separate method; it's
+already a no-op when the component's absent, and unlike a `set`/`unset`-style
+chainable wrapper it can return a value out of the closure.
 
 **Single-entity archetype lookup**
 - `get::<A>(Entity) -> Option<A::Ref<'_>>`

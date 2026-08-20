@@ -40,11 +40,11 @@ fn process(world: &mut World, entity: Entity, delta: f64) {
         return;
     }
 
-    world.edit_component::<Health>(entity, |health| {
+    if let Some(health) = world.get_mut::<Health>(entity) {
         if health.hp > 0 {
             health.hp -= 1;
         }
-    });
+    }
 }
 ```
 

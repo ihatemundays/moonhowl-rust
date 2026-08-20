@@ -125,21 +125,6 @@ fn tuple_archetype_mutation_misses_without_running_when_a_component_is_absent() 
 }
 
 #[test]
-fn edit_component_mutates_in_place_and_is_a_noop_when_absent() {
-    let mut world = World::new();
-    let entity = world.spawn();
-    world.set_component(entity, Position { x: 1.0, y: 2.0 });
-
-    world
-        .edit_component::<Position>(entity, |pos| pos.x += 1.0)
-        .edit_component::<Velocity>(entity, |vel| vel.dx += 1.0);
-
-    let x = world.get::<Position>(entity).map(|pos| pos.x);
-    assert_eq!(x, Some(2.0));
-    assert!(!world.has_component::<Velocity>(entity));
-}
-
-#[test]
 fn three_component_archetype_mutation() {
     let mut world = World::new();
     let entity = world.spawn();
