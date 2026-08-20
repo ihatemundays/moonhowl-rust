@@ -57,8 +57,10 @@ fn main() {
 ```
 
 See `examples/simulation.rs` for a small multi-tick sim (movement, per-entity
-damage, despawn-on-death) and `examples/parallel.rs` for the parallel query
-variants.
+damage, despawn-on-death), `examples/parallel.rs` for the parallel query
+variants, and `examples/deferred_mutation.rs` for the collect-then-apply
+pattern needed to add/remove components or despawn based on what a query
+sees (its closures never hand back `&mut World`).
 
 ## API
 
