@@ -77,9 +77,11 @@ impl World {
         if !self.is_alive(entity) {
             return false;
         }
+
         for store in self.stores.values_mut() {
             store.remove(entity);
         }
+
         self.generations[entity.index() as usize] += 1;
         self.free_indices.push(entity.index());
         true
