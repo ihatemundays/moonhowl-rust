@@ -113,7 +113,10 @@ for the one case where that follow-up can't happen *inside* the closure).
 All four `with_archetype*` queries are driven by the smallest of the
 matching component stores, not by scanning every entity in the `World` —
 querying `(OnScreen, Position)` where 1,000 of 1,000,000 entities are
-`OnScreen` costs O(1,000), not O(1,000,000).
+`OnScreen` costs O(1,000), not O(1,000,000). That driving entity list is
+cached per archetype and only rebuilt when the driving store actually
+changes, and each store involved is looked up and downcast once per query
+call rather than once per entity — see Design below.
 
 ## Design
 
@@ -132,6 +135,19 @@ and a later `{index: 5, generation: 1}` (after slot 5 was despawned and
 reused) are unequal values, and every `SparseSet` stores the full `Entity`
 next to its data, so a lookup with a stale handle returns `None` instead of
 silently reading whatever now occupies that slot.
+
+**Why bulk queries resolve stores once, not once per entity.** An early
+version looked each component store up by `TypeId` and downcast it inside
+the per-entity fetch, so an `(A, B)` query over a million entities did a
+million hashmap lookups and downcasts per component. `Archetype::resolve`/
+`resolve_mut` now do that lookup once per `with_archetype*` call, handing
+back a `View`/`ViewMut` of the concrete `SparseSet`s involved; the per-entity
+step is then just a direct sparse-array probe against that already-resolved
+view. Combined with caching the driving entity list itself (keyed per
+archetype, invalidated only when that archetype's driving store structurally
+changes — see the previous section), a repeated query over an unchanged
+`World` costs a version check plus one O(1) probe per entity, not a hashmap
+lookup and a downcast per component per entity.
 
 **Why `with_archetype_async_mut` is single-component only.** Parallel
 mutation across a tuple archetype would need disjoint mutable access into
@@ -155,7 +171,7 @@ per-entity bag** like this crate's own previous design.
 |---|---|---|---|
 | Component add/remove | O(1), local to the entity | O(1), local to that component's set | can move the entity to a different table |
 | "every entity with X" | O(all entities) scan | O(entities with X) via that component's dense array | O(entities with X), often better cache locality across a whole query |
-| Multi-component iteration | dict lookup per component per entity | smallest set drives, others probed at scattered indices | fully contiguous, index-aligned columns |
+| Multi-component iteration | dict lookup per component per entity | stores resolved once per query, then smallest set drives with the rest probed at scattered indices | fully contiguous, index-aligned columns |
 | Parallel mutation across N components | N/A | needs unsafe scattered-index access (not implemented here) | safe by construction — columns are already aligned |
 | Structural cost | none (nothing to move) | none (sets are independent) | archetype migration on add/remove |
 
@@ -175,6 +191,12 @@ leaving scheduling and ordering to the caller (see the top-level README's
 Component stores use a `HashMap<TypeId, Box<dyn ComponentStore>>` with a
 custom `FxHasher` instead of Rust's default `SipHash`, since `TypeId` keys
 don't need cryptographic hashing.
+
+Each `SparseSet<T>` also tracks a `version`, bumped only on structural change
+(a component gained or lost, not a value written in place). `World` uses that
+to cache each archetype's driving entity list and reuse it across repeated
+queries — see "Why bulk queries resolve stores once, not once per entity"
+above.
 
 ```
 cargo run --release --example bench      # get / tuple get / has_component, tight loop

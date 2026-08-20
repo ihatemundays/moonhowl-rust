@@ -4,11 +4,12 @@ pub struct SparseSet<T> {
     sparse: Vec<Option<u32>>,
     dense_entities: Vec<Entity>,
     dense: Vec<T>,
+    version: u64,
 }
 
 impl<T> SparseSet<T> {
     pub fn new() -> Self {
-        Self { sparse: Vec::new(), dense_entities: Vec::new(), dense: Vec::new() }
+        Self { sparse: Vec::new(), dense_entities: Vec::new(), dense: Vec::new(), version: 0 }
     }
 
     pub fn insert(&mut self, entity: Entity, value: T) -> Option<T> {
@@ -27,6 +28,7 @@ impl<T> SparseSet<T> {
         self.sparse[index] = Some(dense_index);
         self.dense_entities.push(entity);
         self.dense.push(value);
+        self.version += 1;
         None
     }
 
@@ -39,7 +41,12 @@ impl<T> SparseSet<T> {
         if let Some(&moved) = self.dense_entities.get(dense_index) {
             self.sparse[moved.index() as usize] = Some(dense_index as u32);
         }
+        self.version += 1;
         Some(removed)
+    }
+
+    pub(crate) fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn contains(&self, entity: Entity) -> bool {
