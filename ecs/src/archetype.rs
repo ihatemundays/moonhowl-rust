@@ -1,25 +1,33 @@
 use crate::component::Component;
 use crate::entity::Entity;
+use crate::sparse_set::SparseSet;
+use crate::world::World;
 use std::any::TypeId;
 
 pub trait Archetype {
     type Ref<'a>;
     type RefMut<'a>;
 
-    fn fetch(entity: &Entity) -> Option<Self::Ref<'_>>;
-    fn fetch_mut(entity: &mut Entity) -> Option<Self::RefMut<'_>>;
+    fn type_ids() -> Vec<TypeId>;
+
+    fn fetch(world: &World, entity: Entity) -> Option<Self::Ref<'_>>;
+    fn fetch_mut(world: &mut World, entity: Entity) -> Option<Self::RefMut<'_>>;
 }
 
 impl<T: Component> Archetype for T {
     type Ref<'a> = &'a T;
     type RefMut<'a> = &'a mut T;
 
-    fn fetch(entity: &Entity) -> Option<Self::Ref<'_>> {
-        entity.get_component::<T>()
+    fn type_ids() -> Vec<TypeId> {
+        vec![TypeId::of::<T>()]
     }
 
-    fn fetch_mut(entity: &mut Entity) -> Option<Self::RefMut<'_>> {
-        entity.get_component_mut::<T>()
+    fn fetch(world: &World, entity: Entity) -> Option<Self::Ref<'_>> {
+        world.component::<T>(entity)
+    }
+
+    fn fetch_mut(world: &mut World, entity: Entity) -> Option<Self::RefMut<'_>> {
+        world.component_mut::<T>(entity)
     }
 }
 
@@ -29,16 +37,19 @@ macro_rules! impl_archetype_for_tuple {
             type Ref<'a> = ($(&'a $t,)+);
             type RefMut<'a> = ($(&'a mut $t,)+);
 
-            fn fetch(entity: &Entity) -> Option<Self::Ref<'_>> {
-                Some(($(entity.get_component::<$t>()?,)+))
+            fn type_ids() -> Vec<TypeId> {
+                vec![$(TypeId::of::<$t>()),+]
             }
 
-            fn fetch_mut(entity: &mut Entity) -> Option<Self::RefMut<'_>> {
-                let [$($v,)+] = entity.get_components_mut([$(TypeId::of::<$t>()),+]);
+            fn fetch(world: &World, entity: Entity) -> Option<Self::Ref<'_>> {
+                Some(($(world.component::<$t>(entity)?,)+))
+            }
+
+            fn fetch_mut(world: &mut World, entity: Entity) -> Option<Self::RefMut<'_>> {
+                let [$($v,)+] = world.disjoint_stores_mut([$(TypeId::of::<$t>()),+]);
                 Some(($(
-                    $v.and_then(|component| {
-                        (component.as_mut() as &mut dyn std::any::Any).downcast_mut::<$t>()
-                    })?,
+                    $v.and_then(|store| store.as_any_mut().downcast_mut::<SparseSet<$t>>())
+                        .and_then(|set| set.get_mut(entity))?,
                 )+))
             }
         }

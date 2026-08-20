@@ -1,4 +1,4 @@
-use ecs::{Component, Entity};
+use ecs::{Component, World};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -14,37 +14,39 @@ impl Component for Health {}
 const ITERS: u32 = 20_000_000;
 
 fn main() {
-    let mut entity = Entity::new();
-    entity
-        .set_component(Position { x: 0.0 })
-        .set_component(Velocity { dx: 1.0 })
-        .set_component(Health(100.0));
+    let mut world = World::new();
+    let entity = world.spawn();
+    world
+        .set_component(entity, Position { x: 0.0 })
+        .set_component(entity, Velocity { dx: 1.0 })
+        .set_component(entity, Health(100.0));
+    let world = black_box(world);
     let entity = black_box(entity);
 
     let start = Instant::now();
     let mut acc = 0.0f32;
     for _ in 0..ITERS {
-        acc += black_box(&entity).get_component::<Position>().map_or(0.0, |p| p.x);
+        acc += black_box(&world).get::<Position>(entity).map_or(0.0, |p| p.x);
     }
     let elapsed = start.elapsed();
     black_box(acc);
-    println!("get_component::<Position>: {:.2} ns/op", elapsed.as_nanos() as f64 / ITERS as f64);
+    println!("get::<Position>: {:.2} ns/op", elapsed.as_nanos() as f64 / ITERS as f64);
 
     let start = Instant::now();
     let mut acc = 0.0f32;
     for _ in 0..ITERS {
-        acc += black_box(&entity)
-            .with_archetype::<(Position, Velocity, Health), _>(|(p, v, h)| p.x + v.dx + h.0)
-            .unwrap_or(0.0);
+        acc += black_box(&world)
+            .get::<(Position, Velocity, Health)>(entity)
+            .map_or(0.0, |(p, v, h)| p.x + v.dx + h.0);
     }
     let elapsed = start.elapsed();
     black_box(acc);
-    println!("with_archetype::<(Position, Velocity, Health)>: {:.2} ns/op", elapsed.as_nanos() as f64 / ITERS as f64);
+    println!("get::<(Position, Velocity, Health)>: {:.2} ns/op", elapsed.as_nanos() as f64 / ITERS as f64);
 
     let start = Instant::now();
     let mut hits = 0u32;
     for _ in 0..ITERS {
-        if black_box(&entity).has_component::<Position>() {
+        if black_box(&world).has_component::<Position>(entity) {
             hits += 1;
         }
     }
