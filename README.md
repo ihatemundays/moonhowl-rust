@@ -9,7 +9,7 @@ versioned on their own. Nothing in this workspace depends on Godot or
 
 | Crate | Description |
 |---|---|
-| [`ecs`](ecs/README.md) | A tiny per-entity component store with type-safe multi-component access ("archetypes"). No `World`, no scheduler — just a fast, typed bag of data per object. |
+| [`ecs`](ecs/README.md) | A small sparse-set ECS: components live in per-type stores on a `World`, entities are cheap generational ids, with type-safe multi-component access ("archetypes") both per-entity and world-wide. No scheduler — the caller decides when and how queries run. |
 | [`util`](util/README.md) | Small delta-time helpers for game loops — an accumulate-and-fire timer, as a function and a macro. |
 
 See each crate's own README for the full API and examples.
@@ -26,18 +26,18 @@ mh_util = { git = "https://github.com/ihatemundays/moonhowl-rust", branch = "mas
 ```
 
 ```rust
-use mh_ecs::{Component, Entity};
+use mh_ecs::{Component, Entity, World};
 use mh_util::throttle;
 
 struct Health { hp: u8 }
 impl Component for Health {}
 
-fn process(entity: &mut Entity, delta: f64) {
+fn process(world: &mut World, entity: Entity, delta: f64) {
     if !throttle!(delta, 0.25) {
         return;
     }
 
-    entity.edit_component::<Health>(|health| {
+    world.edit_component::<Health>(entity, |health| {
         if health.hp > 0 {
             health.hp -= 1;
         }
@@ -50,9 +50,9 @@ fn process(entity: &mut Entity, delta: f64) {
 - **Zero dependencies.** Both crates build on `std` alone.
 - **Small surface area.** Each crate does one thing — a component store, a
   timer — rather than growing into a general-purpose engine.
-- **No hidden control flow.** `ecs` has no scheduler or `World`; the caller
-  decides when and how entities are updated (in the game, each Godot node
-  owns its own `Entity` and drives it from `process`/`physics_process`).
+- **No hidden control flow.** `ecs` has no scheduler; the caller decides when
+  and how queries and entity updates run (in the game, each Godot node holds
+  its own `Entity` and drives it from `process`/`physics_process`).
 
 ## Testing
 
