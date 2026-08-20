@@ -37,7 +37,7 @@ fn main() {
 
     for tick in 1..=4 {
         // World-driven query: only visits entities that have *both* components.
-        world.with_archetype_mut::<(Position, Velocity)>(|(pos, vel)| {
+        world.with_archetype_mut::<(Position, Velocity)>(|(pos, vel), _| {
             pos.x += vel.dx;
             pos.y += vel.dy;
         });
@@ -55,7 +55,7 @@ fn main() {
         }
 
         println!("-- tick {tick} --");
-        world.with_archetype::<(Name, Position)>(|(name, pos)| {
+        world.with_archetype::<(Name, Position)>(|(name, pos), _| {
             println!("  {}: ({:.1}, {:.1})", name.0, pos.x, pos.y);
         });
     }

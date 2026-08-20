@@ -27,7 +27,7 @@ fn main() {
     // ~1,000-entity OnScreen set -- not by scanning all 1,000,000 entities.
     let start = Instant::now();
     let mut visited = 0u32;
-    world.with_archetype::<(OnScreen, Position)>(|_| visited += 1);
+    world.with_archetype::<(OnScreen, Position)>(|_, _| visited += 1);
     println!("sequential (OnScreen, Position): {visited} entities in {:?}", start.elapsed());
 
     // Note: with only ~1,000 matching entities, this is likely *slower* than the
@@ -35,7 +35,7 @@ fn main() {
     // with_archetype_async pays off once the driving set is large, not tiny.
     let start = Instant::now();
     let hits = AtomicU64::new(0);
-    world.with_archetype_async::<(OnScreen, Position)>(|_| {
+    world.with_archetype_async::<(OnScreen, Position)>(|_, _| {
         hits.fetch_add(1, Ordering::Relaxed);
     });
     println!(
@@ -45,8 +45,11 @@ fn main() {
     );
 
     // Parallel mutation is restricted to a single component's dense storage,
-    // so it covers all TOTAL entities with Position, tagged or not.
+    // so it covers all TOTAL entities with Position, tagged or not. The Entity
+    // is handed back too -- useful for entity-keyed logic, though not for
+    // checking other components: the closure only has `&mut Position`, not
+    // `&World` (that store's the one being split across threads).
     let start = Instant::now();
-    world.with_archetype_async_mut::<Position>(|pos| pos.x *= 2.0);
+    world.with_archetype_async_mut::<Position>(|pos, _entity| pos.x *= 2.0);
     println!("parallel mut (Position): {TOTAL} entities in {:?}", start.elapsed());
 }

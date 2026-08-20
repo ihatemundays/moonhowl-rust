@@ -130,40 +130,41 @@ impl World {
         A::fetch_mut(self, entity)
     }
 
-    pub fn with_archetype<A: Archetype>(&self, mut f: impl FnMut(A::Ref<'_>)) {
+    pub fn with_archetype<A: Archetype>(&self, mut f: impl FnMut(A::Ref<'_>, Entity)) {
         for entity in self.driving_entities(&A::type_ids()) {
             if let Some(value) = A::fetch(self, entity) {
-                f(value);
+                f(value, entity);
             }
         }
     }
 
-    pub fn with_archetype_mut<A: Archetype>(&mut self, mut f: impl FnMut(A::RefMut<'_>)) {
+    pub fn with_archetype_mut<A: Archetype>(&mut self, mut f: impl FnMut(A::RefMut<'_>, Entity)) {
         for entity in self.driving_entities(&A::type_ids()) {
             if let Some(value) = A::fetch_mut(self, entity) {
-                f(value);
+                f(value, entity);
             }
         }
     }
 
-    pub fn with_archetype_async<A: Archetype>(&self, f: impl Fn(A::Ref<'_>) + Sync) {
+    pub fn with_archetype_async<A: Archetype>(&self, f: impl Fn(A::Ref<'_>, Entity) + Sync) {
         let f = &f;
         let entities = self.driving_entities(&A::type_ids());
         for_each_chunk(&entities, |chunk| {
             for &entity in chunk {
                 if let Some(value) = A::fetch(self, entity) {
-                    f(value);
+                    f(value, entity);
                 }
             }
         });
     }
 
-    pub fn with_archetype_async_mut<T: Component>(&mut self, f: impl Fn(&mut T) + Sync) {
+    pub fn with_archetype_async_mut<T: Component>(&mut self, f: impl Fn(&mut T, Entity) + Sync) {
         let f = &f;
         if let Some(store) = self.store_mut::<T>() {
-            for_each_chunk_mut(store.values_mut(), |chunk| {
-                for value in chunk {
-                    f(value);
+            let (entities, values) = store.entities_and_values_mut();
+            for_each_indexed_chunk_mut(entities, values, |entity_chunk, value_chunk| {
+                for (&entity, value) in entity_chunk.iter().zip(value_chunk) {
+                    f(value, entity);
                 }
             });
         }
@@ -235,12 +236,18 @@ fn for_each_chunk<T: Sync>(items: &[T], work: impl Fn(&[T]) + Sync) {
     });
 }
 
-fn for_each_chunk_mut<T: Send>(items: &mut [T], work: impl Fn(&mut [T]) + Sync) {
+/// Splits `entities` and `values` into matching, index-aligned chunk pairs and runs `work`
+/// on each pair across a scoped thread pool. `entities` and `values` must be the same length.
+fn for_each_indexed_chunk_mut<T: Send>(
+    entities: &[Entity],
+    values: &mut [T],
+    work: impl Fn(&[Entity], &mut [T]) + Sync,
+) {
     let work = &work;
-    let size = chunk_size(items.len());
+    let size = chunk_size(values.len());
     thread::scope(|scope| {
-        for chunk in items.chunks_mut(size) {
-            scope.spawn(move || work(chunk));
+        for (entity_chunk, value_chunk) in entities.chunks(size).zip(values.chunks_mut(size)) {
+            scope.spawn(move || work(entity_chunk, value_chunk));
         }
     });
 }

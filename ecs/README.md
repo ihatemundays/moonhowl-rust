@@ -42,8 +42,10 @@ fn main() {
         .set_component(entity, Position { x: 0.0, y: 0.0 })
         .set_component(entity, Velocity { dx: 1.0, dy: 0.5 });
 
-    // Every entity with both components.
-    world.with_archetype_mut::<(Position, Velocity)>(|(pos, vel)| {
+    // Every entity with both components. The second closure parameter is the
+    // Entity being visited, in case you need it (e.g. to look up another,
+    // optional component, or just for logging/correlation).
+    world.with_archetype_mut::<(Position, Velocity)>(|(pos, vel), _entity| {
         pos.x += vel.dx;
         pos.y += vel.dy;
     });
@@ -79,15 +81,26 @@ variants.
 - `get_mut::<A>(Entity) -> Option<A::RefMut<'_>>`
 
 **World-wide archetype queries**
-- `with_archetype::<A>(f: FnMut(A::Ref<'_>))` — every matching entity, sequential.
-- `with_archetype_mut::<A>(f: FnMut(A::RefMut<'_>))` — same, mutable. Tuple
+
+Every `with_archetype*` closure's last parameter is the `Entity` being
+visited — useful for logging/correlation, or for a follow-up lookup against
+another, optional component (see the `with_archetype_async_mut` note below
+for the one case where that follow-up can't happen *inside* the closure).
+
+- `with_archetype::<A>(f: FnMut(A::Ref<'_>, Entity))` — every matching entity, sequential.
+- `with_archetype_mut::<A>(f: FnMut(A::RefMut<'_>, Entity))` — same, mutable. Tuple
   archetypes use disjoint mutable borrows so every member can be written in
   one pass; passing the same type twice (e.g. `(Position, Position)`) panics
   on the mutable path, since that needs two live `&mut` borrows of one slot.
-- `with_archetype_async::<A>(f: Fn(A::Ref<'_>) + Sync)` — same as
+- `with_archetype_async::<A>(f: Fn(A::Ref<'_>, Entity) + Sync)` — same as
   `with_archetype`, split across a scoped thread pool.
-- `with_archetype_async_mut::<T: Component>(f: Fn(&mut T) + Sync)` — parallel
-  mutation, but for a *single* component type only (see Design below).
+- `with_archetype_async_mut::<T: Component>(f: Fn(&mut T, Entity) + Sync)` —
+  parallel mutation, but for a *single* component type only (see Design
+  below). The closure only gets `&mut T` and `Entity`, not `&World` — that
+  component's own store is the one being split mutably across threads, so
+  there's no safe way to also hand back a `World` reference to check other
+  components *from inside* this callback; do that in a follow-up pass with
+  the `Entity` values instead if you need it.
 
 `A` for the tuple form is any tuple of up to 6 `Component` types, e.g.
 `world.with_archetype::<(Position, Velocity, Health)>(...)`.

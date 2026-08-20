@@ -23,7 +23,7 @@ fn with_archetype_runs_over_every_matching_entity() {
     world.spawn();
 
     let mut sum = 0.0;
-    world.with_archetype::<Position>(|pos| sum += pos.x);
+    world.with_archetype::<Position>(|pos, _| sum += pos.x);
 
     assert_eq!(sum, 0.0 + 1.0 + 2.0 + 3.0 + 4.0);
 }
@@ -36,10 +36,10 @@ fn with_archetype_mut_updates_every_matching_entity_in_place() {
         world.set_component(entity, Position { x: i as f32 });
     }
 
-    world.with_archetype_mut::<Position>(|pos| pos.x *= 2.0);
+    world.with_archetype_mut::<Position>(|pos, _| pos.x *= 2.0);
 
     let mut sum = 0.0;
-    world.with_archetype::<Position>(|pos| sum += pos.x);
+    world.with_archetype::<Position>(|pos, _| sum += pos.x);
     assert_eq!(sum, 0.0 + 2.0 + 4.0 + 6.0 + 8.0);
 }
 
@@ -55,7 +55,7 @@ fn with_archetype_parallel_runs_over_every_matching_entity() {
     }
 
     let hits = AtomicI32::new(0);
-    world.with_archetype_async::<Position>(|_pos| {
+    world.with_archetype_async::<Position>(|_pos, _| {
         hits.fetch_add(1, Ordering::Relaxed);
     });
 
@@ -70,11 +70,34 @@ fn with_archetype_async_mut_updates_every_component_in_place() {
         world.set_component(entity, Position { x: 1.0 });
     }
 
-    world.with_archetype_async_mut::<Position>(|pos| pos.x += 2.0);
+    world.with_archetype_async_mut::<Position>(|pos, _| pos.x += 2.0);
 
     let mut sum = 0.0;
-    world.with_archetype::<Position>(|pos| sum += pos.x);
+    world.with_archetype::<Position>(|pos, _| sum += pos.x);
     assert_eq!(sum, 3.0 * 10_000.0);
+}
+
+#[test]
+fn with_archetype_async_mut_hands_back_the_matching_entity() {
+    let mut world = World::new();
+    let entities: Vec<_> = (0..1_000)
+        .map(|i| {
+            let entity = world.spawn();
+            world.set_component(entity, Position { x: i as f32 });
+            entity
+        })
+        .collect();
+
+    let seen = std::sync::Mutex::new(Vec::new());
+    world.with_archetype_async_mut::<Position>(|_pos, entity| {
+        seen.lock().unwrap().push(entity);
+    });
+
+    let mut seen = seen.into_inner().unwrap();
+    seen.sort_by_key(|e| e.index());
+    let mut expected = entities;
+    expected.sort_by_key(|e| e.index());
+    assert_eq!(seen, expected);
 }
 
 #[test]
@@ -86,10 +109,10 @@ fn with_archetype_mut_updates_every_matching_tuple_entity_in_place() {
         world.set_component(entity, Velocity { dx: 2.0 });
     }
 
-    world.with_archetype_mut::<(Position, Velocity)>(|(pos, vel)| pos.x += vel.dx);
+    world.with_archetype_mut::<(Position, Velocity)>(|(pos, vel), _| pos.x += vel.dx);
 
     let mut sum = 0.0;
-    world.with_archetype::<Position>(|pos| sum += pos.x);
+    world.with_archetype::<Position>(|pos, _| sum += pos.x);
     assert_eq!(sum, 3.0 * 10_000.0);
 }
 
@@ -106,7 +129,7 @@ fn despawn_removes_the_entity_from_every_store() {
     assert!(!world.has_component::<Position>(a));
 
     let mut sum = 0.0;
-    world.with_archetype::<Position>(|pos| sum += pos.x);
+    world.with_archetype::<Position>(|pos, _| sum += pos.x);
     assert_eq!(sum, 2.0);
 }
 
