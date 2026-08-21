@@ -70,8 +70,6 @@ impl<T> SparseSet<T> {
         &mut self.dense
     }
 
-    /// `entities()` and `values_mut()` at once, index-aligned -- a single call so both
-    /// borrows can be held together (two separate calls can't, since one needs `&mut self`).
     pub fn entities_and_values_mut(&mut self) -> (&[Entity], &mut [T]) {
         (&self.dense_entities, &mut self.dense)
     }
