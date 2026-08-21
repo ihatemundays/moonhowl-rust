@@ -1,10 +1,11 @@
 # ecs
 
-A small, zero-dependency sparse-set ECS. Components live in per-type stores
-on a `World`; entities are cheap generational ids, not containers. Both
-whole-`World` queries and single-entity lookups are first-class — there's no
-scheduler and no query builder, just typed access to data the caller decides
-when and how to touch.
+A small, zero-dependency archetype/table ECS. Entities with the same exact
+component set live packed together in one table, each component stored in
+its own contiguous, row-aligned column; entities are cheap generational ids,
+not containers. Both whole-`World` queries and single-entity lookups are
+first-class — there's no scheduler and no query builder, just typed access
+to data the caller decides when and how to touch.
 
 ## Concepts
 
@@ -16,15 +17,20 @@ when and how to touch.
   still holding fails lookups safely instead of resolving to whatever
   reoccupies that index later. Cheap enough to store anywhere — a Godot node
   can hold one as a plain field.
-- **World** — owns entity allocation (`spawn`/`despawn`) and one
-  `SparseSet<T>` per component type. All component reads/writes go through
-  `World`, keyed by `Entity`.
-- **SparseSet\<T\>** — the storage underneath each component type: O(1)
-  insert/remove/get, densely packed for iteration. Exported directly in case
-  you want the same structure for your own entity-keyed data.
-- **Archetype** — a single `Component` type, or a tuple of 2–6 of them.
-  `World::get`/`get_mut` fetch an archetype for one entity; `with_archetype*`
-  fetch it for every matching entity in the `World`.
+- **World** — owns entity allocation (`spawn`/`despawn`) and a table per
+  unique component set an entity has ever held. All component reads/writes
+  go through `World`, keyed by `Entity`; internally it resolves `Entity` to
+  a `(table, row)` location, invisible to callers.
+- **SparseSet\<T\>** — a general-purpose, O(1) insert/remove/get store keyed
+  by `Entity`, densely packed for iteration. `World` doesn't use it
+  internally (see Design) — it's exported as an independently useful
+  structure for your own entity-keyed data outside of `World`.
+- **Archetype** — a single `Component` type, or a tuple of 2–6 of them,
+  naming what a query fetches. `World::get`/`get_mut` fetch one for a single
+  entity; `with_archetype*` fetch it for every matching entity in the
+  `World`. (This is the same word `World` uses internally for "a table's
+  exact component set" — a query's `Archetype` just has to be a *subset* of
+  whatever full set a matching table holds, not an exact match.)
 
 ```rust
 use ecs::{Component, World};
@@ -66,20 +72,25 @@ sees (its closures never hand back `&mut World`).
 
 **Entities**
 - `World::spawn() -> Entity`
-- `World::despawn(Entity) -> bool` — removes the entity from every
-  component store and frees its slot for reuse; `false` if already dead.
+- `World::despawn(Entity) -> bool` — removes the entity's row from its
+  table and frees its slot for reuse; `false` if already dead.
 - `World::is_alive(Entity) -> bool`
 - `World::len()` / `is_empty()` — count of currently-alive entities.
 
 **Components** (all keyed by `Entity`)
 - `has_component::<T>(Entity) -> bool`
-- `set_component::<T>(Entity, T) -> &mut Self` — insert or overwrite; chainable.
-- `unset_component::<T>(Entity) -> &mut Self` — remove if present; chainable.
+- `set_component::<T>(Entity, T) -> &mut Self` — insert or overwrite;
+  chainable. Setting a component the entity doesn't already have moves its
+  row to a different table (see Design) — that's amortized O(1) via a cached
+  per-table transition, not a fresh lookup every time.
+- `unset_component::<T>(Entity) -> &mut Self` — remove if present;
+  chainable, same table-migration cost as `set_component`.
 
 To mutate a component in place, use `get_mut::<T>` below — `if let Some(c) =
 world.get_mut::<T>(entity) { ... }` — rather than a separate method; it's
 already a no-op when the component's absent, and unlike a `set`/`unset`-style
-chainable wrapper it can return a value out of the closure.
+chainable wrapper it can return a value out of the closure, and never moves
+the entity's row (no component set change).
 
 **Single-entity archetype lookup**
 - `get::<A>(Entity) -> Option<A::Ref<'_>>`
@@ -89,114 +100,145 @@ chainable wrapper it can return a value out of the closure.
 
 Every `with_archetype*` closure's last parameter is the `Entity` being
 visited — useful for logging/correlation, or for a follow-up lookup against
-another, optional component (see the `with_archetype_async_mut` note below
-for the one case where that follow-up can't happen *inside* the closure).
+another, optional component.
 
 - `with_archetype::<A>(f: FnMut(A::Ref<'_>, Entity))` — every matching entity, sequential.
 - `with_archetype_mut::<A>(f: FnMut(A::RefMut<'_>, Entity))` — same, mutable. Tuple
-  archetypes use disjoint mutable borrows so every member can be written in
+  archetypes use disjoint mutable column borrows so every member can be written in
   one pass; passing the same type twice (e.g. `(Position, Position)`) panics
-  on the mutable path, since that needs two live `&mut` borrows of one slot.
+  on the mutable path, since that needs two live `&mut` borrows of one column.
 - `with_archetype_async::<A>(f: Fn(A::Ref<'_>, Entity) + Sync)` — same as
   `with_archetype`, split across a scoped thread pool.
-- `with_archetype_async_mut::<T: Component>(f: Fn(&mut T, Entity) + Sync)` —
-  parallel mutation, but for a *single* component type only (see Design
-  below). The closure only gets `&mut T` and `Entity`, not `&World` — that
-  component's own store is the one being split mutably across threads, so
-  there's no safe way to also hand back a `World` reference to check other
-  components *from inside* this callback; do that in a follow-up pass with
-  the `Entity` values instead if you need it.
+- `with_archetype_async_mut::<A>(f: Fn(A::RefMut<'_>, Entity) + Sync)` —
+  same as `with_archetype_mut`, split across a scoped thread pool. Unlike
+  the other three, `A` here covers tuples too, not just single components
+  (see Design) — the closure still only gets `A::RefMut<'_>` and `Entity`,
+  not `&World`, since the columns it touches are the ones being split
+  mutably across threads; do a follow-up sequential pass with the `Entity`
+  values if you need to check something else from inside.
 
 `A` for the tuple form is any tuple of up to 6 `Component` types, e.g.
 `world.with_archetype::<(Position, Velocity, Health)>(...)`.
 
-All four `with_archetype*` queries are driven by the smallest of the
-matching component stores, not by scanning every entity in the `World` —
-querying `(OnScreen, Position)` where 1,000 of 1,000,000 entities are
-`OnScreen` costs O(1,000), not O(1,000,000). That driving entity list is
-cached per archetype and only rebuilt when the driving store actually
-changes, and each store involved is looked up and downcast once per query
-call rather than once per entity — see Design below.
+All four `with_archetype*` queries walk every table whose component set is a
+superset of the query's, not the whole `World` — querying `(OnScreen,
+Position)` where only one table actually has both columns costs proportional
+to that table's size, not the total entity count. Which tables match is
+cached per archetype and only rescanned over tables created since the cache
+was last built (tables are created lazily and never removed) — see Design.
 
 ## Design
 
-**Why entities are generational ids, not containers.** The previous version
-of this crate stored components directly on `Entity` (a `HashMap<TypeId,
-Box<dyn Component>>` per entity). That makes single-entity access simple but
-makes "every entity with `X`" an O(all entities) scan with no way to do
-better — there's no index anywhere that says which entities actually have a
-given component. Moving component storage onto `World`, one `SparseSet<T>`
-per type, means a query can start from the component's own dense list of
-entities instead of guessing-and-checking against everyone.
+**Why entities are generational ids, not containers.** An early version of
+this crate stored components directly on `Entity` (a `HashMap<TypeId, Box<dyn
+Component>>` per entity). That makes single-entity access simple but makes
+"every entity with `X`" an O(all entities) scan with no way to do better —
+there's no index anywhere that says which entities actually have a given
+component. Storing components off to the side and resolving `Entity` to a
+location means a query can start from an index of who actually has what,
+instead of guessing-and-checking against everyone.
 
 Generational `Entity` ids are what make an id spawned once, despawned, and
 never looked at again *safe* to still be holding: `{index: 5, generation: 0}`
 and a later `{index: 5, generation: 1}` (after slot 5 was despawned and
-reused) are unequal values, and every `SparseSet` stores the full `Entity`
-next to its data, so a lookup with a stale handle returns `None` instead of
-silently reading whatever now occupies that slot.
+reused) are unequal values, and every lookup — `get`, `get_mut`,
+`has_component`, `set_component`, `unset_component` — resolves through a
+`generations` table keyed by index first, so a stale handle returns
+`None`/no-ops instead of silently reading or corrupting whatever now
+occupies that slot.
 
-**Why bulk queries resolve stores once, not once per entity.** An early
-version looked each component store up by `TypeId` and downcast it inside
-the per-entity fetch, so an `(A, B)` query over a million entities did a
-million hashmap lookups and downcasts per component. `Archetype::resolve`/
-`resolve_mut` now do that lookup once per `with_archetype*` call, handing
-back a `View`/`ViewMut` of the concrete `SparseSet`s involved; the per-entity
-step is then just a direct sparse-array probe against that already-resolved
-view. Combined with caching the driving entity list itself (keyed per
-archetype, invalidated only when that archetype's driving store structurally
-changes — see the previous section), a repeated query over an unchanged
-`World` costs a version check plus one O(1) probe per entity, not a hashmap
-lookup and a downcast per component per entity.
+**Why archetype/table storage, not sparse-set.** An earlier version of this
+crate gave every component type its own global `SparseSet<T>` (see
+`SparseSet` above), with multi-component queries driven by whichever
+involved store was currently smallest, probing the others at scattered
+indices. That turned out to have a real, data-dependent cost: when two
+queried components' stores happened to have been populated in the same
+order (the common case — most components are set together at spawn),
+probing was accidentally near-sequential and cheap; when their insertion
+histories diverged — a component added long after spawn, or reordered by
+despawn churn — each probe was a genuine cache miss, measured at roughly an
+order of magnitude slower on a multi-million-entity benchmark. Grouping
+entities by their exact component set into contiguous, row-aligned tables
+removes the variance entirely: every column in a matching table walks in
+lockstep with every other, with zero per-entity indirection, regardless of
+how or when each entity acquired its components.
 
-**Why `with_archetype_async_mut` is single-component only.** Parallel
-mutation across a tuple archetype would need disjoint mutable access into
-*several* independent `SparseSet`s at once, at indices that don't line up
-between them (entity 5 might be dense index 2 in one store and dense index
-900 in another). That's solvable, but only with unsafe scattered-index code
-proven safe by the entity-chunk partition — the standard approach real ECS
-engines take. This crate stays 100% safe Rust and keeps the scope narrower
-instead: parallel mutation is safe here because it's just `chunks_mut` over
-one component's own contiguous storage. Tuple mutation is still available,
-just sequential, via `with_archetype_mut`.
+The cost moves to structural changes instead: `set_component`/
+`unset_component` now migrate a row between tables when they add or remove
+a component type the entity didn't already have (not when overwriting one
+it already has). Each table caches its `add`/`remove` transition for every
+component type it's seen used, so a repeated identical transition — the
+common case, since most entities of a given kind acquire/lose components in
+the same few ways — is an O(1) cached edge lookup, not a fresh scan.
+
+**Why bulk queries resolve columns once per table, not once per entity.**
+`Archetype::resolve_columns`/`resolve_columns_mut` look up and downcast a
+query's columns once per *matching table* per `with_archetype*` call, handing
+back direct `&[T]`/`&mut [T]` slices; the per-entity step is then just an
+array index, no further lookup or downcast. Combined with the cached
+matching-table list (previous section), a repeated query over a `World`
+with no new archetypes appearing costs one cheap cache check plus a
+straight-line walk — no hashmap traffic in the per-entity loop at all.
+
+**Why `with_archetype_async_mut` covers tuples, not just single components.**
+An earlier, sparse-set-backed version of this crate restricted parallel
+mutation to one component type at a time: splitting several *independent*
+sparse sets safely across threads would need scattered-index access proven
+sound by the chunk partition, which isn't expressible without `unsafe`.
+Table storage removes that obstacle — every column in one table is a
+same-length `Vec<T>`, row-aligned with every other column in that table, so
+splitting several of them by the *same* disjoint row ranges is exactly the
+soundness argument `<[T]>::split_at_mut`/`chunks_mut` already rely on for a
+single slice, just applied to a tuple of slices at once. No `unsafe` needed.
+
+**A trade-off worth knowing about: fragmentation.** Because a table groups
+entities by their *entire* component set, a single-component query like
+`with_archetype_async_mut::<Position>` no longer has one global store to
+walk — it walks every table that includes a `Position` column, however many
+distinct archetypes that turns out to be. If your entities are spread across
+many different component combinations, a query for one broadly-shared
+component pays a little overhead per table (each gets its own scoped-thread
+batch) instead of one large contiguous pass. This is the standard trade-off
+archetype ECS engines make (Bevy and flecs both document it): multi-component
+queries — the case this redesign targets — get dramatically faster and lose
+their insertion-order variance; very broad single-component queries over a
+world with many distinct archetypes can do a bit more (still linear, still
+correct) work than a sparse-set world would have.
 
 ## How this compares to other ECS designs
 
-This crate is a small **sparse-set ECS** — the same storage family as
-[EnTT](https://github.com/skypjack/entt) (C++) and `specs`' default storage,
-as opposed to an **archetype/table ECS** like Bevy or `hecs`, or a **naive
-per-entity bag** like this crate's own previous design.
+This crate is a small **archetype/table ECS** — the same storage family as
+[Bevy](https://bevyengine.org/) and [flecs](https://www.flecs.dev/) — having
+moved there from an interim **sparse-set** design (the same family as
+[EnTT](https://github.com/skypjack/entt) (C++) and `specs`' default
+storage), which itself replaced an original **naive per-entity bag**.
 
-| | per-entity bag (old design) | sparse-set (this crate) | archetype/table (Bevy, hecs) |
+| | per-entity bag (original) | sparse-set (interim) | archetype/table (this crate) |
 |---|---|---|---|
-| Component add/remove | O(1), local to the entity | O(1), local to that component's set | can move the entity to a different table |
-| "every entity with X" | O(all entities) scan | O(entities with X) via that component's dense array | O(entities with X), often better cache locality across a whole query |
-| Multi-component iteration | dict lookup per component per entity | stores resolved once per query, then smallest set drives with the rest probed at scattered indices | fully contiguous, index-aligned columns |
-| Parallel mutation across N components | N/A | needs unsafe scattered-index access (not implemented here) | safe by construction — columns are already aligned |
-| Structural cost | none (nothing to move) | none (sets are independent) | archetype migration on add/remove |
+| Component add/remove | O(1), local to the entity | O(1), local to that component's set | migrates the entity's row to a different table, amortized O(1) via a cached transition |
+| "every entity with X" | O(all entities) scan | O(entities with X) via that component's dense array | O(entities with X), walking whichever tables have that column |
+| Multi-component iteration | dict lookup per component per entity | smallest set drives, others probed at scattered indices (cost varies with insertion-order correlation) | fully contiguous, index-aligned columns — no variance |
+| Parallel mutation across N components | N/A | needs unsafe scattered-index access (never implemented here) | safe by construction — columns in one table are already row-aligned |
+| Structural cost | none (nothing to move) | none (sets are independent) | one table-to-table row move, all-or-nothing per transition |
 
-Sparse-set storage is the middle ground: cheaper structural changes than an
-archetype ECS, much better query cost than a per-entity bag, at the cost of
-some cache locality on multi-component queries and (here) not attempting
-lock-free parallel mutation across several component types at once. This
-crate deliberately stays smaller than any of the named engines — no
+This crate deliberately stays smaller than any of the named engines — no
 scheduler, no system dependency graph, no query builder, no
 relationships/hierarchies, no serialization. It borrows the storage strategy
-of a production sparse-set ECS without the framework built on top of it,
+of a production archetype ECS without the framework built on top of it,
 leaving scheduling and ordering to the caller (see the top-level README's
 "no hidden control flow" principle).
 
 ## Performance
 
-Component stores use a `HashMap<TypeId, Box<dyn ComponentStore>>` with a
-custom `FxHasher` instead of Rust's default `SipHash`, since `TypeId` keys
-don't need cryptographic hashing.
+Table and archetype-registry maps (`TypeId` keys, both for a table's own
+columns and for its cached add/remove transition edges) use a custom
+`FxHasher` instead of Rust's default `SipHash`, since `TypeId` keys don't
+need cryptographic hashing.
 
-Each `SparseSet<T>` also tracks a `version`, bumped only on structural change
-(a component gained or lost, not a value written in place). `World` uses that
-to cache each archetype's driving entity list and reuse it across repeated
-queries — see "Why bulk queries resolve stores once, not once per entity"
-above.
+Tables are created lazily and never removed, and a table's column set never
+changes once created — so the per-archetype "which tables match" cache (see
+Design) only ever needs to scan tables added since it was last consulted,
+never re-checking ones it already classified.
 
 ```
 cargo run --release --example bench      # get / tuple get / has_component, tight loop

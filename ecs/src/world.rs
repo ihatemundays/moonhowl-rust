@@ -1,75 +1,35 @@
 use crate::archetype::Archetype;
 use crate::component::Component;
 use crate::entity::Entity;
-use crate::sparse_set::SparseSet;
-use std::any::{Any, TypeId};
+use crate::table::{ArchetypeRegistry, FxBuildHasher, TableId, migrate_shared_columns};
+use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::ops::Range;
 use std::thread;
 
-#[derive(Default)]
-struct FxHasher(u64);
-
-impl Hasher for FxHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        for chunk in bytes.chunks(8) {
-            let mut buf = [0u8; 8];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            self.0 = (self.0.rotate_left(5) ^ u64::from_ne_bytes(buf)).wrapping_mul(SEED);
-        }
-    }
+#[derive(Clone, Copy)]
+pub(crate) struct EntityLocation {
+    pub(crate) table: TableId,
+    pub(crate) row: u32,
 }
 
-pub(crate) trait ComponentStore: Any + Send + Sync {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn entities(&self) -> &[Entity];
-    fn remove(&mut self, entity: Entity);
-    fn version(&self) -> u64;
-}
-
-impl<T: Component> ComponentStore for SparseSet<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn entities(&self) -> &[Entity] {
-        SparseSet::entities(self)
-    }
-
-    fn remove(&mut self, entity: Entity) {
-        SparseSet::remove(self, entity);
-    }
-
-    fn version(&self) -> u64 {
-        SparseSet::version(self)
-    }
-}
-
-type StoreMap = HashMap<TypeId, Box<dyn ComponentStore>, BuildHasherDefault<FxHasher>>;
-
+/// Which tables currently match an `Archetype` query, cached per archetype
+/// type. Tables are only ever created, never removed, and a table's column
+/// set never changes once created, so this only ever needs to scan the
+/// tables added since it was last consulted.
 #[derive(Default)]
 struct QueryCache {
-    driving_type: Option<TypeId>,
-    driving_version: u64,
-    entities: Vec<Entity>,
+    tables_scanned: usize,
+    matching: Vec<TableId>,
 }
 
 pub struct World {
     generations: Vec<u32>,
     free_indices: Vec<u32>,
-    stores: StoreMap,
-    query_cache: RefCell<HashMap<TypeId, QueryCache, BuildHasherDefault<FxHasher>>>,
+    locations: Vec<EntityLocation>,
+    registry: ArchetypeRegistry,
+    query_cache: RefCell<HashMap<TypeId, QueryCache, FxBuildHasher>>,
 }
 
 impl World {
@@ -77,28 +37,44 @@ impl World {
         Self {
             generations: Vec::new(),
             free_indices: Vec::new(),
-            stores: StoreMap::default(),
+            locations: Vec::new(),
+            registry: ArchetypeRegistry::new(),
             query_cache: RefCell::new(HashMap::default()),
         }
     }
 
     pub fn spawn(&mut self) -> Entity {
-        if let Some(index) = self.free_indices.pop() {
+        let entity = if let Some(index) = self.free_indices.pop() {
             Entity::new(index, self.generations[index as usize])
         } else {
             let index = self.generations.len() as u32;
             self.generations.push(0);
             Entity::new(index, 0)
+        };
+
+        let root = self.registry.root_table();
+        let row = self.registry.table_mut(root).push_entity(entity);
+        let location = EntityLocation { table: root, row };
+
+        let index = entity.index() as usize;
+        if index < self.locations.len() {
+            self.locations[index] = location;
+        } else {
+            self.locations.push(location);
         }
+
+        entity
     }
 
     pub fn despawn(&mut self, entity: Entity) -> bool {
-        if !self.is_alive(entity) {
-            return false;
+        let Some(loc) = self.location(entity) else { return false };
+        let table = self.registry.table_mut(loc.table);
+        let row = loc.row as usize;
+        for col in table.columns_mut().values_mut() {
+            col.swap_remove_drop(row);
         }
-
-        for store in self.stores.values_mut() {
-            store.remove(entity);
+        if let Some(moved) = table.swap_remove_entity(row) {
+            self.locations[moved.index() as usize].row = row as u32;
         }
 
         self.generations[entity.index() as usize] += 1;
@@ -119,19 +95,40 @@ impl World {
     }
 
     pub fn set_component<T: Component>(&mut self, entity: Entity, component: T) -> &mut Self {
-        self.store_mut_or_init::<T>().insert(entity, component);
+        let Some(loc) = self.location(entity) else { return self };
+        let type_id = TypeId::of::<T>();
+        if self.registry.table(loc.table).has_column(type_id) {
+            // Already present: overwrite in place, no migration.
+            self.registry.table_mut(loc.table).set_value::<T>(loc.row as usize, component);
+            return self;
+        }
+
+        let dst_id = self.registry.add_edge::<T>(loc.table);
+        self.move_entity(entity, loc.table, dst_id, loc.row as usize);
+        // T's column exists in dst but wasn't in src, so migrate_shared_columns (inside
+        // move_entity) left it untouched -- every other dst column and dst's entity list
+        // are now one row longer, but T's column is still one short. Pushing here brings
+        // it back into row alignment with the rest of the table.
+        self.registry.table_mut(dst_id).push_column::<T>(component);
         self
     }
 
     pub fn unset_component<T: Component>(&mut self, entity: Entity) -> &mut Self {
-        if let Some(store) = self.store_mut::<T>() {
-            store.remove(entity);
+        let Some(loc) = self.location(entity) else { return self };
+        let type_id = TypeId::of::<T>();
+        if !self.registry.table(loc.table).has_column(type_id) {
+            return self;
         }
+
+        let dst_id = self.registry.remove_edge::<T>(loc.table);
+        self.move_entity(entity, loc.table, dst_id, loc.row as usize);
+        // dst has strictly fewer columns than src; migrate_shared_columns already dropped
+        // T's value on the way. Every dst column is already aligned -- nothing else to do.
         self
     }
 
     pub fn has_component<T: Component>(&self, entity: Entity) -> bool {
-        self.store::<T>().is_some_and(|store| store.contains(entity))
+        self.location(entity).is_some_and(|loc| self.registry.table(loc.table).has_column(TypeId::of::<T>()))
     }
 
     pub fn get<A: Archetype>(&self, entity: Entity) -> Option<A::Ref<'_>> {
@@ -143,123 +140,122 @@ impl World {
     }
 
     pub fn with_archetype<A: Archetype>(&self, mut f: impl FnMut(A::Ref<'_>, Entity)) {
-        let Some(view) = A::resolve(self) else { return };
-        let entities = self.driving_entities::<A>();
-        for &entity in &entities {
-            if let Some(value) = A::fetch_view(&view, entity) {
-                f(value, entity);
+        for table_id in self.matching_tables::<A>() {
+            let table = self.registry.table(table_id);
+            let Some(columns) = A::resolve_columns(table.columns()) else { continue };
+            for (row, &entity) in table.entities().iter().enumerate() {
+                f(A::row(&columns, row), entity);
             }
         }
-        self.restore_driving_entities::<A>(entities);
     }
 
     pub fn with_archetype_mut<A: Archetype>(&mut self, mut f: impl FnMut(A::RefMut<'_>, Entity)) {
-        let entities = self.driving_entities::<A>();
-        if let Some(mut view) = A::resolve_mut(self) {
-            for &entity in &entities {
-                if let Some(value) = A::fetch_view_mut(&mut view, entity) {
-                    f(value, entity);
-                }
+        for table_id in self.matching_tables::<A>() {
+            let table = self.registry.table_mut(table_id);
+            let (entities, columns) = table.split_mut();
+            let Some(mut resolved) = A::resolve_columns_mut(columns) else { continue };
+            for (row, &entity) in entities.iter().enumerate() {
+                f(A::row_mut(&mut resolved, row), entity);
             }
         }
-        self.restore_driving_entities::<A>(entities);
     }
 
     pub fn with_archetype_async<A>(&self, f: impl Fn(A::Ref<'_>, Entity) + Sync)
     where
         A: Archetype,
-        for<'a> A::View<'a>: Sync,
+        for<'a> A::Columns<'a>: Sync,
     {
-        let Some(view) = A::resolve(self) else { return };
         let f = &f;
-        let view = &view;
-        let entities = self.driving_entities::<A>();
-        for_each_chunk(&entities, |chunk| {
-            for &entity in chunk {
-                if let Some(value) = A::fetch_view(view, entity) {
-                    f(value, entity);
-                }
-            }
-        });
-        self.restore_driving_entities::<A>(entities);
-    }
-
-    pub fn with_archetype_async_mut<T: Component>(&mut self, f: impl Fn(&mut T, Entity) + Sync) {
-        let f = &f;
-        if let Some(store) = self.store_mut::<T>() {
-            let (entities, values) = store.entities_and_values_mut();
-            for_each_indexed_chunk_mut(entities, values, |entity_chunk, value_chunk| {
-                for (&entity, value) in entity_chunk.iter().zip(value_chunk) {
-                    f(value, entity);
+        for table_id in self.matching_tables::<A>() {
+            let table = self.registry.table(table_id);
+            let Some(columns) = A::resolve_columns(table.columns()) else { continue };
+            let columns = &columns;
+            thread::scope(|scope| {
+                for range in row_chunks(table.len()) {
+                    scope.spawn(move || {
+                        for row in range {
+                            f(A::row(columns, row), table.entities()[row]);
+                        }
+                    });
                 }
             });
         }
     }
 
+    pub fn with_archetype_async_mut<A>(&mut self, f: impl Fn(A::RefMut<'_>, Entity) + Sync)
+    where
+        A: Archetype,
+        for<'a> A::ColumnsMut<'a>: Send,
+    {
+        let f = &f;
+        for table_id in self.matching_tables::<A>() {
+            let table = self.registry.table_mut(table_id);
+            let (entities, columns) = table.split_mut();
+            let Some(resolved) = A::resolve_columns_mut(columns) else { continue };
+            thread::scope(|scope| {
+                let mut remaining = resolved;
+                for range in row_chunks(entities.len()) {
+                    let chunk_entities = &entities[range.clone()];
+                    let (chunk, rest) = A::split_columns_mut(remaining, range.len());
+                    remaining = rest;
+                    scope.spawn(move || {
+                        let mut chunk = chunk;
+                        for (i, &entity) in chunk_entities.iter().enumerate() {
+                            f(A::row_mut(&mut chunk, i), entity);
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    pub(crate) fn location(&self, entity: Entity) -> Option<EntityLocation> {
+        self.is_alive(entity).then(|| self.locations[entity.index() as usize])
+    }
+
     pub(crate) fn component<T: Component>(&self, entity: Entity) -> Option<&T> {
-        self.store::<T>()?.get(entity)
+        let loc = self.location(entity)?;
+        self.registry.table(loc.table).column::<T>()?.get(loc.row as usize)
     }
 
     pub(crate) fn component_mut<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
-        self.store_mut::<T>()?.get_mut(entity)
+        let loc = self.location(entity)?;
+        self.registry.table_mut(loc.table).column_mut::<T>()?.get_mut(loc.row as usize)
     }
 
-    pub(crate) fn disjoint_stores_mut<const N: usize>(
-        &mut self,
-        ids: [TypeId; N],
-    ) -> [Option<&mut Box<dyn ComponentStore>>; N] {
-        self.stores.get_disjoint_mut(ids.each_ref())
+    pub(crate) fn registry_mut(&mut self) -> &mut ArchetypeRegistry {
+        &mut self.registry
     }
 
-    pub(crate) fn store<T: Component>(&self) -> Option<&SparseSet<T>> {
-        self.stores.get(&TypeId::of::<T>())?.as_any().downcast_ref()
-    }
+    fn move_entity(&mut self, entity: Entity, src_id: TableId, dst_id: TableId, row: usize) {
+        let [src, dst] = self.registry.two_tables_mut(src_id, dst_id);
+        migrate_shared_columns(src, dst, row);
 
-    pub(crate) fn store_mut<T: Component>(&mut self) -> Option<&mut SparseSet<T>> {
-        self.stores.get_mut(&TypeId::of::<T>())?.as_any_mut().downcast_mut()
-    }
-
-    fn store_mut_or_init<T: Component>(&mut self) -> &mut SparseSet<T> {
-        self.stores
-            .entry(TypeId::of::<T>())
-            .or_insert_with(|| Box::new(SparseSet::<T>::new()))
-            .as_any_mut()
-            .downcast_mut()
-            .expect("component store type mismatch for TypeId")
-    }
-    
-    fn driving_entities<A: Archetype>(&self) -> Vec<Entity> {
-        let type_ids = A::type_ids();
-        let mut driving: Option<(TypeId, usize)> = None;
-        for &id in &type_ids {
-            let Some(store) = self.stores.get(&id) else {
-                return Vec::new();
-            };
-            let len = store.entities().len();
-            if driving.is_none_or(|(_, current_len)| len < current_len) {
-                driving = Some((id, len));
-            }
+        if let Some(moved) = src.swap_remove_entity(row) {
+            self.locations[moved.index() as usize].row = row as u32;
         }
-        let Some((driving_type, _)) = driving else {
-            return Vec::new();
-        };
-        let driving_version = self.stores[&driving_type].version();
 
+        let new_row = dst.push_entity(entity);
+        self.locations[entity.index() as usize] = EntityLocation { table: dst_id, row: new_row };
+    }
+
+    /// The tables currently matching `A`: every table whose column set is a
+    /// superset of `A::type_ids()`. Cached per archetype type and only
+    /// rescanned over tables created since the cache was last built.
+    fn matching_tables<A: Archetype>(&self) -> Vec<TableId> {
+        let type_ids = A::type_ids();
         let mut cache = self.query_cache.borrow_mut();
         let entry = cache.entry(TypeId::of::<A>()).or_default();
-        if entry.driving_type != Some(driving_type) || entry.driving_version != driving_version {
-            entry.entities.clear();
-            entry.entities.extend_from_slice(self.stores[&driving_type].entities());
-            entry.driving_type = Some(driving_type);
-            entry.driving_version = driving_version;
+        let total = self.registry.table_count();
+        if entry.tables_scanned < total {
+            for (id, table) in self.registry.tables_from(entry.tables_scanned) {
+                if type_ids.iter().all(|ty| table.has_column(*ty)) {
+                    entry.matching.push(id);
+                }
+            }
+            entry.tables_scanned = total;
         }
-        std::mem::take(&mut entry.entities)
-    }
-    
-    fn restore_driving_entities<A: Archetype>(&self, entities: Vec<Entity>) {
-        if let Some(entry) = self.query_cache.borrow_mut().get_mut(&TypeId::of::<A>()) {
-            entry.entities = entities;
-        }
+        entry.matching.clone()
     }
 }
 
@@ -274,25 +270,7 @@ fn chunk_size(len: usize) -> usize {
     len.div_ceil(threads).max(1)
 }
 
-fn for_each_chunk<T: Sync>(items: &[T], work: impl Fn(&[T]) + Sync) {
-    let work = &work;
-    thread::scope(|scope| {
-        for chunk in items.chunks(chunk_size(items.len())) {
-            scope.spawn(move || work(chunk));
-        }
-    });
-}
-
-fn for_each_indexed_chunk_mut<T: Send>(
-    entities: &[Entity],
-    values: &mut [T],
-    work: impl Fn(&[Entity], &mut [T]) + Sync,
-) {
-    let work = &work;
-    let size = chunk_size(values.len());
-    thread::scope(|scope| {
-        for (entity_chunk, value_chunk) in entities.chunks(size).zip(values.chunks_mut(size)) {
-            scope.spawn(move || work(entity_chunk, value_chunk));
-        }
-    });
+fn row_chunks(len: usize) -> impl Iterator<Item = Range<usize>> {
+    let size = chunk_size(len);
+    (0..len).step_by(size).map(move |start| start..(start + size).min(len))
 }

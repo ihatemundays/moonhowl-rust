@@ -10,7 +10,7 @@ deliberate exception.
 
 | Crate | Description |
 |---|---|
-| [`ecs`](ecs/README.md) | A small sparse-set ECS: components live in per-type stores on a `World`, entities are cheap generational ids, with type-safe multi-component access ("archetypes") both per-entity and world-wide. No scheduler — the caller decides when and how queries run. |
+| [`ecs`](ecs/README.md) | A small archetype/table ECS: entities with the same component set are packed into contiguous, row-aligned tables on a `World`, entities are cheap generational ids, with type-safe multi-component access ("archetypes") both per-entity and world-wide. No scheduler — the caller decides when and how queries run. |
 | [`util`](util/README.md) | Small delta-time helpers for game loops — an accumulate-and-fire timer, as a function and a macro. |
 | [`util-godot`](util-godot/README.md) | Depends on the real `godot` (gdext) crate — the workspace's one intentional exception. Currently: `DespawnGuard`, which despawns an `ecs::Entity` exactly once on Godot's `PREDELETE` notification, so a freed node can't leak its entity in the `World`. |
 

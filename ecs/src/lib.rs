@@ -2,6 +2,7 @@ mod archetype;
 mod component;
 mod entity;
 mod sparse_set;
+mod table;
 mod world;
 
 pub use archetype::Archetype;
