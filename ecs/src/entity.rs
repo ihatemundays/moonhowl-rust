@@ -12,7 +12,7 @@ impl Hasher for FxHasher {
     fn finish(&self) -> u64 {
         self.0
     }
-    
+
     fn write(&mut self, bytes: &[u8]) {
         const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
         for chunk in bytes.chunks(8) {
