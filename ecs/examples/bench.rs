@@ -35,8 +35,8 @@ fn main() {
     let mut acc = 0.0f32;
     for _ in 0..ITERS {
         acc += black_box(&entity)
-            .with_archetype::<(Position, Velocity, Health), _>(|(p, v, h)| p.x + v.dx + h.0)
-            .unwrap_or(0.0);
+            .with_archetype::<(Position, Velocity, Health)>()
+            .map_or(0.0, |(p, v, h)| p.x + v.dx + h.0);
     }
     let elapsed = start.elapsed();
     black_box(acc);

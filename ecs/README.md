@@ -20,6 +20,7 @@ to it.
   to a given entity (usually by checking which components are present).
   Multiple different system types can be bound to the same entity at once.
 - **Archetype** — a single `Component` type, or a tuple of 2–6 of them.
+  `Entity::has_archetype` checks whether every member component is present;
   `Entity::with_archetype` fetches a whole archetype at once (read-only),
   returning `None` if any member component is missing.
 
@@ -65,15 +66,13 @@ fn main() {
 
     assert!(entity.is_system_active::<Movement>());
 
-    let moved = entity
-        .with_system_archetype::<Movement, (Position, Velocity), _>(|(pos, vel)| Position {
-            x: pos.x + vel.dx,
-            y: pos.y + vel.dy,
-        })
+    let (pos, vel) = entity
+        .with_system_archetype::<Movement, (Position, Velocity)>()
         .unwrap();
+    let moved = Position { x: pos.x + vel.dx, y: pos.y + vel.dy };
     entity.set_component(moved).commit();
 
-    let moved = entity.with_archetype::<Position, _>(|pos| (pos.x, pos.y));
+    let moved = entity.with_archetype::<Position>().map(|pos| (pos.x, pos.y));
     assert_eq!(moved, Some((1.0, 0.5)));
 }
 ```
@@ -96,12 +95,21 @@ fn main() {
 
 ### Archetypes
 
-- `with_archetype::<A, R>(f: FnOnce(A::Ref<'_>) -> R) -> Option<R>` — read
-  every component in archetype `A`; `None` if any is missing, otherwise
-  `Some(f(...))`.
+- `has_archetype::<A>() -> bool` — whether every component in archetype `A`
+  is present, without fetching any of them.
+- `with_archetype::<A>() -> Option<A::Ref<'_>>` — fetch every component in
+  archetype `A` directly (a `&T` for a single type, a tuple of `&T`s for a
+  tuple archetype); `None` if any is missing.
 
 `A` for the tuple form is any tuple of up to 6 types implementing
-`Component`, e.g. `entity.with_archetype::<(Position, Velocity, Health), _>(...)`.
+`Component`, e.g. `entity.with_archetype::<(Position, Velocity, Health)>()`.
+
+`with_archetype` returns the fetched references directly rather than taking
+a closure — earlier it took `f: impl FnOnce(A::Ref<'_>) -> R` and returned
+`Option<R>`, but a closure boundary makes it awkward to interleave archetype
+reads with other borrows or early returns in the caller. Since it now just
+hands back `Option<A::Ref<'_>>`, normal borrow-checker rules apply directly
+to the caller's code instead of being mediated through a lambda.
 
 ### Systems
 
@@ -112,9 +120,9 @@ fn main() {
   active-system entry if set; chainable.
 - `is_system_active::<T>() -> bool` — whether `T`'s last `test()` (run
   during the most recent `commit()`) returned `true`.
-- `with_system_archetype::<S, A, R>(f: FnOnce(A::Ref<'_>) -> R) -> Option<R>`
-  — like `with_archetype`, but only runs (and only returns `Some`) if system
-  `S` is currently active on the entity.
+- `with_system_archetype::<S, A>() -> Option<A::Ref<'_>>` — like
+  `with_archetype`, but only returns `Some` if system `S` is currently
+  active on the entity.
 
 ### Why there's no `&mut T`
 

@@ -35,9 +35,9 @@ fn single_component_is_a_one_component_archetype() {
     let mut entity = Entity::new();
     entity.set_component(Position { x: 1.0, y: 2.0 }).commit();
 
-    let sum = entity.with_archetype::<Position, _>(|pos| pos.x + pos.y);
+    let pos = entity.with_archetype::<Position>();
 
-    assert_eq!(sum, Some(3.0));
+    assert_eq!(pos.map(|pos| pos.x + pos.y), Some(3.0));
 }
 
 #[test]
@@ -68,16 +68,13 @@ fn tuple_archetype_matches_only_when_every_component_is_present() {
     let mut entity = Entity::new();
     entity.set_component(Position { x: 1.0, y: 2.0 }).commit();
 
-    let mut ran = false;
-    let moved = entity.with_archetype::<(Position, Velocity), _>(|(_position, _velocity)| ran = true);
-    assert_eq!(moved, None);
-    assert!(!ran);
+    assert!(entity.with_archetype::<(Position, Velocity)>().is_none());
 
     entity.set_component(Velocity { dx: 0.5, dy: -0.5 }).commit();
 
-    let moved = entity.with_archetype::<(Position, Velocity), _>(|(pos, vel)| {
-        (pos.x + vel.dx, pos.y + vel.dy)
-    });
+    let moved = entity
+        .with_archetype::<(Position, Velocity)>()
+        .map(|(pos, vel)| (pos.x + vel.dx, pos.y + vel.dy));
     assert_eq!(moved, Some((1.5, 1.5)));
 }
 
@@ -91,7 +88,8 @@ fn larger_tuple_archetype_and_unset_component() {
         .commit();
 
     let label = entity
-        .with_archetype::<(Position, Velocity, Name), _>(|(pos, vel, name)| {
+        .with_archetype::<(Position, Velocity, Name)>()
+        .map(|(pos, vel, name)| {
             format!("{} at ({}, {}) moving ({}, {})", name.0, pos.x, pos.y, vel.dx, vel.dy)
         });
     assert_eq!(label, Some("player at (0, 0) moving (1, 1)".to_string()));
@@ -99,8 +97,7 @@ fn larger_tuple_archetype_and_unset_component() {
     entity.unset_component::<Name>().commit();
     assert!(!entity.has_component::<Name>());
 
-    let label = entity.with_archetype::<(Position, Velocity, Name), _>(|_| ());
-    assert_eq!(label, None);
+    assert!(entity.with_archetype::<(Position, Velocity, Name)>().is_none());
 }
 
 #[test]
@@ -134,7 +131,7 @@ fn set_component_overwrites_the_previous_value_on_commit() {
 
     entity.set_component(Position { x: 11.0, y: 2.0 }).commit();
 
-    let x = entity.with_archetype::<Position, _>(|pos| pos.x);
+    let x = entity.with_archetype::<Position>().map(|pos| pos.x);
     assert_eq!(x, Some(11.0));
 }
 
@@ -152,7 +149,8 @@ fn tuple_archetype_reflects_component_overwrites_after_commit() {
         .commit();
 
     let state = entity
-        .with_archetype::<(Position, Velocity), _>(|(pos, vel)| (pos.x, pos.y, vel.dx, vel.dy));
+        .with_archetype::<(Position, Velocity)>()
+        .map(|(pos, vel)| (pos.x, pos.y, vel.dx, vel.dy));
     assert_eq!(state, Some((1.0, -1.0, 2.0, -1.0)));
 }
 
@@ -178,21 +176,18 @@ fn three_component_archetype_mutation() {
 
     entity.set_component(Position { x: 1.0, y: 1.0 }).commit();
 
-    let position = entity.with_archetype::<Position, _>(|pos| (pos.x, pos.y));
+    let position = entity.with_archetype::<Position>().map(|pos| (pos.x, pos.y));
     assert_eq!(position, Some((1.0, 1.0)));
 
     entity.unset_component::<Name>().commit();
-    let mut ran = false;
-    let result = entity.with_archetype::<(Position, Velocity, Name), _>(|_| ran = true);
-    assert_eq!(result, None);
-    assert!(!ran);
+    assert!(entity.with_archetype::<(Position, Velocity, Name)>().is_none());
 }
 
 #[test]
 fn single_component_archetype_is_none_when_absent() {
     let entity = Entity::new();
 
-    let result = entity.with_archetype::<Position, _>(|pos| pos.x);
+    let result = entity.with_archetype::<Position>().map(|pos| pos.x);
 
     assert_eq!(result, None);
 }
@@ -207,14 +202,13 @@ fn four_component_archetype() {
         .set_component(Health(10))
         .commit();
 
-    let snapshot = entity.with_archetype::<(Position, Velocity, Name, Health), _>(
-        |(pos, vel, name, health)| (pos.x, vel.dx, name.0, health.0),
-    );
+    let snapshot = entity
+        .with_archetype::<(Position, Velocity, Name, Health)>()
+        .map(|(pos, vel, name, health)| (pos.x, vel.dx, name.0, health.0));
     assert_eq!(snapshot, Some((1.0, 1.0, "four", 10)));
 
     entity.unset_component::<Health>().commit();
-    let snapshot = entity.with_archetype::<(Position, Velocity, Name, Health), _>(|_| ());
-    assert_eq!(snapshot, None);
+    assert!(entity.with_archetype::<(Position, Velocity, Name, Health)>().is_none());
 }
 
 #[test]
@@ -232,15 +226,11 @@ fn four_component_archetype_mutation() {
         .set_component(Health(9))
         .commit();
 
-    let health = entity.with_archetype::<Health, _>(|h| h.0);
+    let health = entity.with_archetype::<Health>().map(|h| h.0);
     assert_eq!(health, Some(9));
 
     entity.unset_component::<Name>().commit();
-    let mut ran = false;
-    let result =
-        entity.with_archetype::<(Position, Velocity, Name, Health), _>(|_| ran = true);
-    assert_eq!(result, None);
-    assert!(!ran);
+    assert!(entity.with_archetype::<(Position, Velocity, Name, Health)>().is_none());
 }
 
 #[test]
@@ -254,14 +244,15 @@ fn five_component_archetype() {
         .set_component(Scale(2.0))
         .commit();
 
-    let snapshot = entity.with_archetype::<(Position, Velocity, Name, Health, Scale), _>(
-        |(pos, vel, name, health, scale)| (pos.x, vel.dx, name.0, health.0, scale.0),
-    );
+    let snapshot = entity
+        .with_archetype::<(Position, Velocity, Name, Health, Scale)>()
+        .map(|(pos, vel, name, health, scale)| (pos.x, vel.dx, name.0, health.0, scale.0));
     assert_eq!(snapshot, Some((1.0, 1.0, "five", 10, 2.0)));
 
     entity.unset_component::<Scale>().commit();
-    let snapshot = entity.with_archetype::<(Position, Velocity, Name, Health, Scale), _>(|_| ());
-    assert_eq!(snapshot, None);
+    assert!(entity
+        .with_archetype::<(Position, Velocity, Name, Health, Scale)>()
+        .is_none());
 }
 
 #[test]
@@ -281,15 +272,13 @@ fn five_component_archetype_mutation() {
         .set_component(Scale(4.0))
         .commit();
 
-    let scale = entity.with_archetype::<Scale, _>(|s| s.0);
+    let scale = entity.with_archetype::<Scale>().map(|s| s.0);
     assert_eq!(scale, Some(4.0));
 
     entity.unset_component::<Health>().commit();
-    let mut ran = false;
-    let result = entity
-        .with_archetype::<(Position, Velocity, Name, Health, Scale), _>(|_| ran = true);
-    assert_eq!(result, None);
-    assert!(!ran);
+    assert!(entity
+        .with_archetype::<(Position, Velocity, Name, Health, Scale)>()
+        .is_none());
 }
 
 #[test]
@@ -304,15 +293,17 @@ fn six_component_archetype() {
         .set_component(Tag("player"))
         .commit();
 
-    let snapshot = entity.with_archetype::<(Position, Velocity, Name, Health, Scale, Tag), _>(
-        |(pos, vel, name, health, scale, tag)| (pos.x, vel.dx, name.0, health.0, scale.0, tag.0),
-    );
+    let snapshot = entity
+        .with_archetype::<(Position, Velocity, Name, Health, Scale, Tag)>()
+        .map(|(pos, vel, name, health, scale, tag)| {
+            (pos.x, vel.dx, name.0, health.0, scale.0, tag.0)
+        });
     assert_eq!(snapshot, Some((1.0, 1.0, "six", 10, 2.0, "player")));
 
     entity.unset_component::<Tag>().commit();
-    let snapshot =
-        entity.with_archetype::<(Position, Velocity, Name, Health, Scale, Tag), _>(|_| ());
-    assert_eq!(snapshot, None);
+    assert!(entity
+        .with_archetype::<(Position, Velocity, Name, Health, Scale, Tag)>()
+        .is_none());
 }
 
 #[test]
@@ -333,15 +324,13 @@ fn six_component_archetype_mutation() {
         .set_component(Scale(4.0))
         .commit();
 
-    let scale = entity.with_archetype::<Scale, _>(|s| s.0);
+    let scale = entity.with_archetype::<Scale>().map(|s| s.0);
     assert_eq!(scale, Some(4.0));
 
     entity.unset_component::<Tag>().commit();
-    let mut ran = false;
-    let result = entity
-        .with_archetype::<(Position, Velocity, Name, Health, Scale, Tag), _>(|_| ran = true);
-    assert_eq!(result, None);
-    assert!(!ran);
+    assert!(entity
+        .with_archetype::<(Position, Velocity, Name, Health, Scale, Tag)>()
+        .is_none());
 }
 
 #[test]
@@ -349,7 +338,9 @@ fn duplicate_type_tuple_archetype_reads_the_same_component_twice() {
     let mut entity = Entity::new();
     entity.set_component(Position { x: 3.0, y: 4.0 }).commit();
 
-    let sum = entity.with_archetype::<(Position, Position), _>(|(a, b)| a.x + b.y);
+    let sum = entity
+        .with_archetype::<(Position, Position)>()
+        .map(|(a, b)| a.x + b.y);
 
     assert_eq!(sum, Some(7.0));
 }

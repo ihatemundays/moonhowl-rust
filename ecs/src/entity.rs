@@ -112,13 +112,13 @@ impl Entity {
         A::has(self)
     }
 
-    pub fn with_archetype<A: Archetype, R>(&self, f: impl FnOnce(A::Ref<'_>) -> R) -> Option<R> {
-        A::fetch(self).map(f)
+    pub fn with_archetype<A: Archetype>(&self) -> Option<A::Ref<'_>> {
+        A::fetch(self)
     }
 
-    pub fn with_system_archetype<S: System, A: Archetype, R>(&self, f: impl FnOnce(A::Ref<'_>) -> R) -> Option<R> {
+    pub fn with_system_archetype<S: System, A: Archetype>(&self) -> Option<A::Ref<'_>> {
         if self.is_system_active::<S>() {
-            return self.with_archetype::<A, R>(f)
+            return self.with_archetype::<A>()
         }
         None
     }
