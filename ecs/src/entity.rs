@@ -108,6 +108,10 @@ impl Entity {
         self
     }
 
+    pub fn has_archetype<A: Archetype>(&self) -> bool {
+        A::has(self)
+    }
+
     pub fn with_archetype<A: Archetype, R>(&self, f: impl FnOnce(A::Ref<'_>) -> R) -> Option<R> {
         A::fetch(self).map(f)
     }

@@ -41,6 +41,29 @@ fn single_component_is_a_one_component_archetype() {
 }
 
 #[test]
+fn has_archetype_matches_single_component() {
+    let mut entity = Entity::new();
+    assert!(!entity.has_archetype::<Position>());
+
+    entity.set_component(Position { x: 1.0, y: 2.0 }).commit();
+    assert!(entity.has_archetype::<Position>());
+}
+
+#[test]
+fn has_archetype_matches_only_when_every_tuple_member_is_present() {
+    let mut entity = Entity::new();
+    entity.set_component(Position { x: 1.0, y: 2.0 }).commit();
+
+    assert!(!entity.has_archetype::<(Position, Velocity)>());
+
+    entity.set_component(Velocity { dx: 0.5, dy: -0.5 }).commit();
+    assert!(entity.has_archetype::<(Position, Velocity)>());
+
+    entity.unset_component::<Velocity>().commit();
+    assert!(!entity.has_archetype::<(Position, Velocity)>());
+}
+
+#[test]
 fn tuple_archetype_matches_only_when_every_component_is_present() {
     let mut entity = Entity::new();
     entity.set_component(Position { x: 1.0, y: 2.0 }).commit();

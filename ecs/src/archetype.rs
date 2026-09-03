@@ -5,6 +5,7 @@ pub trait Archetype {
     type Ref<'a>;
 
     fn fetch(entity: &Entity) -> Option<Self::Ref<'_>>;
+    fn has(entity: &Entity) -> bool;
 }
 
 impl<T: Component> Archetype for T {
@@ -12,6 +13,10 @@ impl<T: Component> Archetype for T {
 
     fn fetch(entity: &Entity) -> Option<Self::Ref<'_>> {
         entity.get_component::<T>()
+    }
+
+    fn has(entity: &Entity) -> bool {
+        entity.has_component::<T>()
     }
 }
 
@@ -22,6 +27,10 @@ macro_rules! impl_archetype_for_tuple {
 
             fn fetch(entity: &Entity) -> Option<Self::Ref<'_>> {
                 Some(($(entity.get_component::<$t>()?,)+))
+            }
+
+            fn has(entity: &Entity) -> bool {
+                $(entity.has_component::<$t>())&&+
             }
         }
     };
