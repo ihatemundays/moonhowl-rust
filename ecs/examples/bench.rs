@@ -18,7 +18,8 @@ fn main() {
     entity
         .set_component(Position { x: 0.0 })
         .set_component(Velocity { dx: 1.0 })
-        .set_component(Health(100.0));
+        .set_component(Health(100.0))
+        .commit();
     let entity = black_box(entity);
 
     let start = Instant::now();

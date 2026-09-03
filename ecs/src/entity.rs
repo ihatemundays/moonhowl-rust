@@ -1,7 +1,8 @@
 use crate::archetype::Archetype;
 use crate::component::Component;
+use crate::system::System;
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
 #[derive(Default)]
@@ -23,15 +24,28 @@ impl Hasher for FxHasher {
 }
 
 type ComponentMap = HashMap<TypeId, Box<dyn Component>, BuildHasherDefault<FxHasher>>;
+type SystemMap = HashMap<TypeId, Box<dyn System>, BuildHasherDefault<FxHasher>>;
+type ActiveSystemSet = HashSet<TypeId, BuildHasherDefault<FxHasher>>;
+
+enum ComponentCommand {
+    Set(TypeId, Box<dyn Component>),
+    Unset(TypeId),
+}
 
 pub struct Entity {
     components: ComponentMap,
+    systems: SystemMap,
+    commands: Vec<ComponentCommand>,
+    active_systems: ActiveSystemSet,
 }
 
 impl Entity {
     pub fn new() -> Self {
         Self {
             components: ComponentMap::default(),
+            systems: SystemMap::default(),
+            commands: Vec::new(),
+            active_systems: ActiveSystemSet::default(),
         }
     }
 
@@ -45,33 +59,52 @@ impl Entity {
             .and_then(|component| (component.as_ref() as &dyn Any).downcast_ref::<T>())
     }
 
-    pub fn get_component_mut<T: Component>(&mut self) -> Option<&mut T> {
-        self.components
-            .get_mut(&TypeId::of::<T>())
-            .and_then(|component| (component.as_mut() as &mut dyn Any).downcast_mut::<T>())
-    }
-
-    pub(crate) fn get_components_mut<const N: usize>(
-        &mut self,
-        ids: [TypeId; N],
-    ) -> [Option<&mut Box<dyn Component>>; N] {
-        self.components.get_disjoint_mut(ids.each_ref())
-    }
-
     pub fn set_component<T: Component>(&mut self, component: T) -> &mut Self {
-        self.components.insert(TypeId::of::<T>(), Box::new(component));
+        self.commands
+            .push(ComponentCommand::Set(TypeId::of::<T>(), Box::new(component)));
         self
     }
 
     pub fn unset_component<T: Component>(&mut self) -> &mut Self {
-        self.components.remove(&TypeId::of::<T>());
+        self.commands.push(ComponentCommand::Unset(TypeId::of::<T>()));
         self
     }
 
-    pub fn edit_component<T: Component>(&mut self, f: impl FnOnce(&mut T)) -> &mut Self {
-        if let Some(component) = self.get_component_mut::<T>() {
-            f(component);
+    pub fn commit(&mut self) -> &mut Self {
+        for command in self.commands.drain(..) {
+            match command {
+                ComponentCommand::Set(id, component) => {
+                    self.components.insert(id, component);
+                }
+                ComponentCommand::Unset(id) => {
+                    self.components.remove(&id);
+                }
+            }
         }
+
+        for (id, system) in self.systems.iter() {
+            if system.test(self) {
+                self.active_systems.insert(*id);
+            } else {
+                self.active_systems.remove(id);
+            }
+        }
+
+        self
+    }
+
+    pub fn is_system_active<T: System>(&self) -> bool {
+        self.active_systems.contains(&TypeId::of::<T>())
+    }
+
+    pub fn bind_system<T: System>(&mut self, system: T) -> &mut Self {
+        self.systems.insert(TypeId::of::<T>(), Box::new(system));
+        self
+    }
+
+    pub fn unbind_system<T: System>(&mut self) -> &mut Self {
+        self.systems.remove(&TypeId::of::<T>());
+        self.active_systems.remove(&TypeId::of::<T>());
         self
     }
 
@@ -79,11 +112,11 @@ impl Entity {
         A::fetch(self).map(f)
     }
 
-    pub fn with_archetype_mut<A: Archetype, R>(
-        &mut self,
-        f: impl FnOnce(A::RefMut<'_>) -> R,
-    ) -> Option<R> {
-        A::fetch_mut(self).map(f)
+    pub fn with_system_archetype<S: System, A: Archetype, R>(&self, f: impl FnOnce(A::Ref<'_>) -> R) -> Option<R> {
+        if self.is_system_active::<S>() {
+            return self.with_archetype::<A, R>(f)
+        }
+        None
     }
 }
 
