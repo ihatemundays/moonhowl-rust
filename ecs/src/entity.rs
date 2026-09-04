@@ -129,7 +129,7 @@ impl Entity {
 
     pub fn with_system_archetype<S: System, A: Archetype>(&self) -> Option<A::Ref<'_>> {
         if self.is_system_active::<S>() {
-            return self.with_archetype::<A>()
+            return self.with_archetype::<A>();
         }
         None
     }
