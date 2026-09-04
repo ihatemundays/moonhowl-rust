@@ -1,4 +1,4 @@
-use ecs::systems::AllRefreshed;
+use ecs::systems::AllRefreshedSystem;
 use ecs::{Component, Entity, System};
 
 struct Position { x: f32, y: f32 }
@@ -11,18 +11,18 @@ struct Health(i32);
 impl Component for Health {}
 
 /// Fires only once position/velocity/health are all freshly re-set *and*
-/// health is still positive. Composes `AllRefreshed` as a plain field and
-/// calls its `test` directly, rather than binding it as its own system and
-/// checking `is_system_active` -- within a single `commit()`, systems run
-/// in unspecified order, so there's no guarantee `AllRefreshed` would have
-/// already run when a sibling system asked about it.
+/// health is still positive. Composes `AllRefreshedSystem` as a plain field
+/// and calls its `test` directly, rather than binding it as its own system
+/// and checking `is_system_active` -- within a single `commit()`, systems
+/// run in unspecified order, so there's no guarantee `AllRefreshedSystem`
+/// would have already run when a sibling system asked about it.
 struct RevivedAndMoving {
-    refresh: AllRefreshed<(Position, Velocity, Health)>,
+    refresh: AllRefreshedSystem<(Position, Velocity, Health)>,
 }
 
 impl RevivedAndMoving {
     fn new() -> Self {
-        Self { refresh: AllRefreshed::new() }
+        Self { refresh: AllRefreshedSystem::new() }
     }
 }
 

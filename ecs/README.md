@@ -47,7 +47,7 @@ system. With nothing queued it's a true no-op: it doesn't touch the
 component set, doesn't call any system's `test()`, and leaves the
 active-system set exactly as it was (unlike `commit()`, which always
 re-tests and can flip a system inactive even when nothing changed — see
-`AllRefreshed` below, which goes inactive on a plain `commit()` with
+`AllRefreshedSystem` below, which goes inactive on a plain `commit()` with
 nothing queued because it sees the same addresses again). Once anything
 is queued, `lazy_commit()` behaves exactly like `commit()`.
 
@@ -138,21 +138,21 @@ to the caller's code instead of being mediated through a lambda.
   `with_archetype`, but only returns `Some` if system `S` is currently
   active on the entity.
 
-### `systems::AllRefreshed<A>` — change detection
+### `systems::AllRefreshedSystem<A>` — change detection
 
-`AllRefreshed<A>` (in the `systems` module, alongside other ready-made
+`AllRefreshedSystem<A>` (in the `systems` module, alongside other ready-made
 `System`s) is active only once every member of archetype `A` has a fresh
 address since the last `commit()` — i.e. all of them were actually
 re-`set_component`'d, not left over from before. `set_component` always
 allocates a new `Box`, so an unchanged component keeps the address
-`AllRefreshed` last recorded for it; it's `false` as soon as *any* single
-member repeats.
+`AllRefreshedSystem` last recorded for it; it's `false` as soon as *any*
+single member repeats.
 
 ```rust
 use ecs::Entity;
-use ecs::systems::AllRefreshed;
+use ecs::systems::AllRefreshedSystem;
 
-type Refresh = AllRefreshed<(Position, Velocity, Health)>;
+type Refresh = AllRefreshedSystem<(Position, Velocity, Health)>;
 
 entity.bind_system(Refresh::new());
 entity.commit();
@@ -174,11 +174,12 @@ To use it as a building block inside a larger system, hold it as a plain
 field and call its `test` directly, rather than binding it as its own
 system and checking `is_system_active` from a sibling — within a single
 `commit()`, systems run in unspecified order, so there's no guarantee
-`AllRefreshed` would already have run when another system asked about it:
+`AllRefreshedSystem` would already have run when another system asked
+about it:
 
 ```rust
 struct RevivedAndMoving {
-    refresh: AllRefreshed<(Position, Velocity, Health)>,
+    refresh: AllRefreshedSystem<(Position, Velocity, Health)>,
 }
 
 impl System for RevivedAndMoving {
@@ -188,13 +189,13 @@ impl System for RevivedAndMoving {
 }
 ```
 
-See `examples/all_refreshed.rs` and `tests/refreshed.rs` for a plain
-walkthrough, and `examples/composed_refreshed.rs` for the composed-system
+See `examples/all_refreshed_system.rs` and `tests/refreshed.rs` for a plain
+walkthrough, and `examples/composed_refreshed_system.rs` for the composed-system
 version above:
 
 ```
-cargo run --example all_refreshed
-cargo run --example composed_refreshed
+cargo run --example all_refreshed_system
+cargo run --example composed_refreshed_system
 ```
 
 ### Why there's no `&mut T`

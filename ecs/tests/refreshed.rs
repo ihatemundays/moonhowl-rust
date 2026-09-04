@@ -1,5 +1,5 @@
 use ecs::{Component, Entity};
-use ecs::systems::AllRefreshed;
+use ecs::systems::AllRefreshedSystem;
 
 #[allow(dead_code)]
 struct Position {
@@ -22,7 +22,7 @@ impl Component for Health {}
 
 #[test]
 fn single_component_refreshed_is_active_only_after_a_fresh_set() {
-    type Refresh = AllRefreshed<Position>;
+    type Refresh = AllRefreshedSystem<Position>;
 
     let mut entity = Entity::new();
     entity
@@ -40,7 +40,7 @@ fn single_component_refreshed_is_active_only_after_a_fresh_set() {
 
 #[test]
 fn tuple_refreshed_is_inactive_while_any_member_is_missing() {
-    type Refresh = AllRefreshed<(Position, Velocity)>;
+    type Refresh = AllRefreshedSystem<(Position, Velocity)>;
 
     let mut entity = Entity::new();
     entity
@@ -53,7 +53,7 @@ fn tuple_refreshed_is_inactive_while_any_member_is_missing() {
 
 #[test]
 fn tuple_refreshed_goes_inactive_once_settled_then_active_again_once_all_members_refresh() {
-    type Refresh = AllRefreshed<(Position, Velocity, Health)>;
+    type Refresh = AllRefreshedSystem<(Position, Velocity, Health)>;
 
     let mut entity = Entity::new();
     entity

@@ -1,5 +1,5 @@
 use ecs::{Component, Entity};
-use ecs::systems::AllRefreshed;
+use ecs::systems::AllRefreshedSystem;
 
 struct Position { x: f32, y: f32 }
 impl Component for Position {}
@@ -10,7 +10,7 @@ impl Component for Velocity {}
 struct Health(i32);
 impl Component for Health {}
 
-type Refresh = AllRefreshed<(Position, Velocity, Health)>;
+type Refresh = AllRefreshedSystem<(Position, Velocity, Health)>;
 
 fn main() {
     let mut entity = Entity::new();

@@ -1,4 +1,4 @@
-use ecs::systems::AllRefreshed;
+use ecs::systems::AllRefreshedSystem;
 use ecs::{Component, Entity, System};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -72,7 +72,7 @@ fn lazy_commit_with_no_queued_commands_is_a_no_op() {
 
 #[test]
 fn lazy_commit_leaves_system_active_state_untouched_when_nothing_is_queued() {
-    type Refresh = AllRefreshed<Position>;
+    type Refresh = AllRefreshedSystem<Position>;
 
     let mut entity = Entity::new();
     entity.bind_system(Refresh::new());
