@@ -124,6 +124,43 @@ to the caller's code instead of being mediated through a lambda.
   `with_archetype`, but only returns `Some` if system `S` is currently
   active on the entity.
 
+### `AllRefreshed<A>` — change detection
+
+`AllRefreshed<A>` is a ready-made `System` that's active only once every
+member of archetype `A` has a fresh address since the last `commit()` —
+i.e. all of them were actually re-`set_component`'d, not left over from
+before. `set_component` always allocates a new `Box`, so an unchanged
+component keeps the address `AllRefreshed` last recorded for it; it's
+`false` as soon as *any* single member repeats.
+
+```rust
+use ecs::{AllRefreshed, Entity};
+
+type Refresh = AllRefreshed<(Position, Velocity, Health)>;
+
+entity.bind_system(Refresh::new());
+entity.commit();
+entity.is_system_active::<Refresh>(); // true only once all three are fresh
+```
+
+It's built on a second, opt-in trait, `AddressArchetype: Archetype`
+(implemented for the same single-type-or-tuple-of-up-to-6 shapes as
+`Archetype`), which fetches each member's address instead of its data.
+This is kept separate from `Archetype` itself — most archetypes are only
+ever read via `with_archetype` and shouldn't have to carry
+address-comparison machinery they don't use.
+
+`test()` needs `Cell` for interior mutability internally, since `System::test`
+takes `&self`, not `&mut self` — there's no other way for it to remember
+what it saw last time.
+
+See `examples/all_refreshed.rs` and `tests/refreshed.rs` for a full runnable
+walkthrough:
+
+```
+cargo run --example all_refreshed
+```
+
 ### Why there's no `&mut T`
 
 `set_component`/`unset_component` + `commit()` are the *only* way a
