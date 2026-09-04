@@ -189,13 +189,50 @@ impl System for RevivedAndMoving {
 }
 ```
 
-See `examples/all_refreshed_system.rs` and `tests/refreshed.rs` for a plain
+See `examples/all_refreshed_system.rs` and `tests/all_refreshed_system.rs` for a plain
 walkthrough, and `examples/composed_refreshed_system.rs` for the composed-system
 version above:
 
 ```
 cargo run --example all_refreshed_system
 cargo run --example composed_refreshed_system
+```
+
+### `systems::AnyRefreshedSystem<A>` — change detection (any member)
+
+`AnyRefreshedSystem<A>` is `AllRefreshedSystem`'s OR counterpart: active
+once *at least one* member of archetype `A` has a fresh address since the
+last `commit()`, rather than requiring every member to refresh together.
+Naming mirrors `Iterator::all`/`Iterator::any` on purpose — same AND/OR
+relationship, same names.
+
+```rust
+use ecs::Entity;
+use ecs::systems::AnyRefreshedSystem;
+
+type Refresh = AnyRefreshedSystem<(Position, Velocity, Health)>;
+
+entity.bind_system(Refresh::new());
+entity.commit();
+entity.is_system_active::<Refresh>(); // true as soon as any one of the three is fresh
+```
+
+Both systems share `AddressArchetype`'s two combinators: `any_repeats`
+(true if at least one member's address is unchanged, OR of equality) and
+`all_repeat` (true only if every member's address is unchanged, AND of
+equality). `AllRefreshedSystem::test` negates the first, `AnyRefreshedSystem::test`
+negates the second — De Morgan's laws turn "OR of equal" into "AND of
+different" and vice versa, which is exactly the AND/ANY split above.
+
+For a single-component archetype, `AllRefreshedSystem<T>` and
+`AnyRefreshedSystem<T>` are identical — there's only one member, so "all"
+and "any" collapse to the same check. The distinction only matters once
+`A` has 2 or more members.
+
+See `examples/any_refreshed_system.rs` and `tests/any_refreshed_system.rs`:
+
+```
+cargo run --example any_refreshed_system
 ```
 
 ### Why there's no `&mut T`
@@ -245,3 +282,9 @@ components), reads, deferred/ordered command application, overwrites via
 with nothing queued it skips system re-testing entirely and leaves the
 active-system set untouched, whereas a plain `commit()` in the same spot
 would re-test and could flip a system's active state.
+
+`tests/all_refreshed_system.rs` and `tests/any_refreshed_system.rs` cover
+`AllRefreshedSystem` and `AnyRefreshedSystem` respectively: single- and
+multi-member archetypes, going inactive when a required member is
+missing, and the AND-vs-OR contrast — `AllRefreshedSystem` needs every
+member fresh in the same commit, `AnyRefreshedSystem` only needs one.

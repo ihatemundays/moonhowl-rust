@@ -7,6 +7,7 @@ pub trait AddressArchetype: Archetype {
 
     fn addresses(entity: &Entity) -> Option<Self::Addresses>;
     fn any_repeats(current: Self::Addresses, previous: Self::Addresses) -> bool;
+    fn all_repeat(current: Self::Addresses, previous: Self::Addresses) -> bool;
 }
 
 impl<T: Component> AddressArchetype for T {
@@ -17,6 +18,10 @@ impl<T: Component> AddressArchetype for T {
     }
 
     fn any_repeats(current: Self::Addresses, previous: Self::Addresses) -> bool {
+        current == previous
+    }
+
+    fn all_repeat(current: Self::Addresses, previous: Self::Addresses) -> bool {
         current == previous
     }
 }
@@ -34,6 +39,12 @@ macro_rules! impl_address_archetype_for_tuple {
                 let ($($cur,)+) = current;
                 let ($($prev,)+) = previous;
                 $($cur == $prev)||+
+            }
+
+            fn all_repeat(current: Self::Addresses, previous: Self::Addresses) -> bool {
+                let ($($cur,)+) = current;
+                let ($($prev,)+) = previous;
+                $($cur == $prev)&&+
             }
         }
     };
