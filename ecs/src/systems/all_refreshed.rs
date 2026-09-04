@@ -1,8 +1,7 @@
-use crate::entity::Entity;
-use crate::system::System;
 use crate::systems::address_archetype::AddressArchetype;
 use std::cell::Cell;
 use std::marker::PhantomData;
+use crate::{Entity, System};
 
 pub struct AllRefreshed<A: AddressArchetype> {
     seen: Cell<Option<A::Addresses>>,
