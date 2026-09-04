@@ -40,6 +40,17 @@ component set: for each bound system, `test()` is called, and the system's
 accordingly. So after a `commit()`, `is_system_active::<T>()` always
 reflects the current components.
 
+`lazy_commit()` is `commit()`, but skipped entirely when nothing is
+queued — useful when you only want to observe whether there *are* pending
+commands before paying for draining them and re-testing every bound
+system. With nothing queued it's a true no-op: it doesn't touch the
+component set, doesn't call any system's `test()`, and leaves the
+active-system set exactly as it was (unlike `commit()`, which always
+re-tests and can flip a system inactive even when nothing changed — see
+`AllRefreshed` below, which goes inactive on a plain `commit()` with
+nothing queued because it sees the same addresses again). Once anything
+is queued, `lazy_commit()` behaves exactly like `commit()`.
+
 ```rust
 use ecs::{Component, Entity, System};
 
@@ -92,6 +103,9 @@ fn main() {
   commands and apply them to the live component set, in the order they were
   issued, then re-run every bound system's `test()` to refresh the
   active-system set; chainable.
+- `lazy_commit() -> &mut Self` — like `commit()`, but a no-op if nothing is
+  queued: skips draining, skips re-testing every bound system, and leaves
+  the active-system set untouched; chainable.
 
 ### Archetypes
 
@@ -224,3 +238,9 @@ cargo test -p ecs
 `tests/archetype.rs` covers single- and multi-component archetypes (1–6
 components), reads, deferred/ordered command application, overwrites via
 `set_component`, and missing-component misses.
+
+`tests/lazy_commit.rs` covers `lazy_commit()`: it applies queued
+`set_component`/`unset_component` commands the same as `commit()`, but
+with nothing queued it skips system re-testing entirely and leaves the
+active-system set untouched, whereas a plain `commit()` in the same spot
+would re-test and could flip a system's active state.

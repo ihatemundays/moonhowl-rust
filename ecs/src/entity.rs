@@ -93,6 +93,14 @@ impl Entity {
         self
     }
 
+    pub fn lazy_commit(&mut self) -> &mut Self {
+        if self.commands.len() == 0 {
+            return self;
+        }
+
+        self.commit()
+    }
+
     pub fn is_system_active<T: System>(&self) -> bool {
         self.active_systems.contains(&TypeId::of::<T>())
     }
