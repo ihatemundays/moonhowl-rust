@@ -1,18 +1,15 @@
 use crate::systems::address_archetype::AddressArchetype;
 use std::cell::Cell;
-use std::marker::PhantomData;
 use crate::{Entity, System};
 
 pub struct AllRefreshedSystem<A: AddressArchetype> {
     seen: Cell<Option<A::Addresses>>,
-    _marker: PhantomData<fn() -> A>,
 }
 
 impl<A: AddressArchetype> AllRefreshedSystem<A> {
     pub fn new() -> Self {
         Self {
             seen: Cell::new(None),
-            _marker: PhantomData,
         }
     }
 }
