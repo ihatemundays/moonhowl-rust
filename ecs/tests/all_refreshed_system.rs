@@ -21,7 +21,7 @@ struct Health(i32);
 impl Component for Health {}
 
 #[test]
-fn single_component_refreshed_is_active_only_after_a_fresh_set() {
+fn single_component_all_refreshed_is_active_only_after_a_fresh_set() {
     type Refresh = AllRefreshedSystem<Position>;
 
     let mut entity = Entity::new();
@@ -39,7 +39,7 @@ fn single_component_refreshed_is_active_only_after_a_fresh_set() {
 }
 
 #[test]
-fn tuple_refreshed_is_inactive_while_any_member_is_missing() {
+fn tuple_all_refreshed_is_inactive_while_any_member_is_missing() {
     type Refresh = AllRefreshedSystem<(Position, Velocity)>;
 
     let mut entity = Entity::new();
@@ -52,7 +52,7 @@ fn tuple_refreshed_is_inactive_while_any_member_is_missing() {
 }
 
 #[test]
-fn tuple_refreshed_goes_inactive_once_settled_then_active_again_once_all_members_refresh() {
+fn tuple_all_refreshed_goes_inactive_once_settled_then_active_again_once_all_members_refresh() {
     type Refresh = AllRefreshedSystem<(Position, Velocity, Health)>;
 
     let mut entity = Entity::new();
