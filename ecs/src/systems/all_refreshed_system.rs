@@ -21,6 +21,10 @@ impl<A: AddressArchetype> Default for AllRefreshedSystem<A> {
 }
 
 impl<A: AddressArchetype + 'static> System for AllRefreshedSystem<A> {
+    fn is_lazy(&self) -> bool {
+        false
+    }
+
     fn test(&self, entity: &Entity) -> bool {
         let Some(current) = A::addresses(entity) else {
             return false;

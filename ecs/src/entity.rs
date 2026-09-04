@@ -71,6 +71,8 @@ impl Entity {
     }
 
     pub fn commit(&mut self) -> &mut Self {
+        let nothing_changed = self.commands.is_empty();
+
         for command in self.commands.drain(..) {
             match command {
                 ComponentCommand::Set(id, component) => {
@@ -83,6 +85,10 @@ impl Entity {
         }
 
         for (id, system) in self.systems.iter() {
+            if nothing_changed && system.is_lazy() {
+                continue;
+            }
+
             if system.test(self) {
                 self.active_systems.insert(*id);
             } else {
@@ -91,14 +97,6 @@ impl Entity {
         }
 
         self
-    }
-
-    pub fn lazy_commit(&mut self) -> &mut Self {
-        if self.commands.len() == 0 {
-            return self;
-        }
-
-        self.commit()
     }
 
     pub fn is_system_active<T: System>(&self) -> bool {

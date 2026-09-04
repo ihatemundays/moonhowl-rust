@@ -27,6 +27,13 @@ impl RevivedAndMoving {
 }
 
 impl System for RevivedAndMoving {
+    // Embeds change detection, so it needs to run every commit -- even one
+    // with nothing queued -- to notice when nothing refreshed and decay
+    // back to inactive, same as `AllRefreshedSystem` itself.
+    fn is_lazy(&self) -> bool {
+        false
+    }
+
     fn test(&self, entity: &Entity) -> bool {
         self.refresh.test(entity) && entity.get_component::<Health>().is_some_and(|h| h.0 > 0)
     }

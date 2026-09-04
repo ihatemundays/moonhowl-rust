@@ -15,9 +15,11 @@ to it.
   non-cryptographic hasher (`FxHasher`) tuned for `TypeId` keys. One entity
   is one bag of components; a game object (a Godot node, say) typically owns
   one `Entity` directly as a struct field.
-- **System** — any `'static` type implementing `System`, whose one method,
-  `test(&self, entity: &Entity) -> bool`, decides whether the system applies
-  to a given entity (usually by checking which components are present).
+- **System** — any `'static` type implementing `System`. Its `test(&self,
+  entity: &Entity) -> bool` decides whether the system applies to a given
+  entity (usually by checking which components are present). Its
+  `is_lazy(&self) -> bool` (defaults to `true`) decides whether `commit()`
+  can skip calling `test()` when nothing was queued that commit — see below.
   Multiple different system types can be bound to the same entity at once.
 - **Archetype** — a single `Component` type, or a tuple of 2–6 of them.
   `Entity::has_archetype` checks whether every member component is present;
@@ -34,22 +36,28 @@ accessor anywhere in the API, so nothing can write to a component outside of
 `set_component` it — `commit()` replaces the old one. See "Why there's no
 `&mut T`" below.
 
-`commit()` also re-evaluates every bound system against the (now up to date)
-component set: for each bound system, `test()` is called, and the system's
-`TypeId` is added to or removed from the entity's active-system set
-accordingly. So after a `commit()`, `is_system_active::<T>()` always
-reflects the current components.
+`commit()` also re-evaluates bound systems against the (now up to date)
+component set: for each system where `test()` is actually called, the
+system's `TypeId` is added to or removed from the entity's active-system
+set accordingly.
 
-`lazy_commit()` is `commit()`, but skipped entirely when nothing is
-queued — useful when you only want to observe whether there *are* pending
-commands before paying for draining them and re-testing every bound
-system. With nothing queued it's a true no-op: it doesn't touch the
-component set, doesn't call any system's `test()`, and leaves the
-active-system set exactly as it was (unlike `commit()`, which always
-re-tests and can flip a system inactive even when nothing changed — see
-`AllRefreshedSystem` below, which goes inactive on a plain `commit()` with
-nothing queued because it sees the same addresses again). Once anything
-is queued, `lazy_commit()` behaves exactly like `commit()`.
+Whether `test()` is actually called depends on the system's `is_lazy()`
+*and* whether anything was queued this commit. If nothing was queued,
+lazy systems (`is_lazy() -> true`, the default) are skipped entirely —
+their active-system entry is left exactly as it was, since nothing that
+could change their answer has happened. Non-lazy systems (`is_lazy() ->
+false`) are always re-tested, queued or not. So after a `commit()`,
+`is_system_active::<T>()` reflects the current components for every
+non-lazy `T`, and for every lazy `T` whose last real answer hasn't been
+invalidated by a no-op commit in between.
+
+This is why `AllRefreshedSystem`/`AnyRefreshedSystem` below override
+`is_lazy()` to `false`: their whole job is noticing when *nothing* changed
+(to decay back to inactive), which requires `test()` to run even on a
+commit with nothing queued. A plain existence check like `Movement` below
+is a good match for the lazy default — if no components changed, its
+answer can't have changed either, so skipping it is a safe, free
+optimization.
 
 ```rust
 use ecs::{Component, Entity, System};
@@ -101,11 +109,9 @@ fn main() {
   Not visible to reads until `commit()`.
 - `commit() -> &mut Self` — drain queued `set_component`/`unset_component`
   commands and apply them to the live component set, in the order they were
-  issued, then re-run every bound system's `test()` to refresh the
-  active-system set; chainable.
-- `lazy_commit() -> &mut Self` — like `commit()`, but a no-op if nothing is
-  queued: skips draining, skips re-testing every bound system, and leaves
-  the active-system set untouched; chainable.
+  issued, then re-test each bound system whose `is_lazy()` is `false`, or
+  whose `is_lazy()` is `true` but something was actually queued this call,
+  to refresh the active-system set; chainable.
 
 ### Archetypes
 
@@ -127,6 +133,18 @@ to the caller's code instead of being mediated through a lambda.
 
 ### Systems
 
+The `System` trait itself has two methods:
+
+- `test(&self, entity: &Entity) -> bool` — required. Decides whether the
+  system applies to `entity`.
+- `is_lazy(&self) -> bool` — defaults to `true`. When `true` and a `commit()`
+  has nothing queued, `test()` is skipped for that system and its
+  active-system entry is left untouched. Override to `false` for a system
+  that needs to run on every `commit()` regardless of whether anything was
+  queued — see `AllRefreshedSystem`/`AnyRefreshedSystem` below.
+
+`Entity` methods for working with bound systems:
+
 - `bind_system::<T>(system: T) -> &mut Self` — bind a system instance to the
   entity; chainable. Takes effect immediately (unlike components, binding
   isn't queued through `commit()`).
@@ -147,6 +165,12 @@ re-`set_component`'d, not left over from before. `set_component` always
 allocates a new `Box`, so an unchanged component keeps the address
 `AllRefreshedSystem` last recorded for it; it's `false` as soon as *any*
 single member repeats.
+
+It overrides `is_lazy()` to `false`. If it stayed lazy (the default),
+`commit()` would skip calling its `test()` on any commit with nothing
+queued — so it would never get the chance to notice "nothing changed" and
+decay back to inactive, and would stay stuck `true` from whenever it last
+saw every member refresh.
 
 ```rust
 use ecs::Entity;
@@ -183,6 +207,13 @@ struct RevivedAndMoving {
 }
 
 impl System for RevivedAndMoving {
+    // Same reason `AllRefreshedSystem` itself overrides this: it embeds
+    // change detection, so it needs to run every commit to notice when
+    // nothing refreshed and decay back to inactive.
+    fn is_lazy(&self) -> bool {
+        false
+    }
+
     fn test(&self, entity: &Entity) -> bool {
         self.refresh.test(entity) && entity.get_component::<Health>().is_some_and(|h| h.0 > 0)
     }
@@ -216,6 +247,10 @@ entity.bind_system(Refresh::new());
 entity.commit();
 entity.is_system_active::<Refresh>(); // true as soon as any one of the three is fresh
 ```
+
+Like `AllRefreshedSystem`, it overrides `is_lazy()` to `false` for the same
+reason: it needs `test()` to run on every commit, queued or not, to notice
+when nothing refreshed and decay back to inactive.
 
 Both systems share `AddressArchetype`'s two combinators: `any_repeats`
 (true if at least one member's address is unchanged, OR of equality) and
@@ -277,11 +312,11 @@ cargo test -p ecs
 components), reads, deferred/ordered command application, overwrites via
 `set_component`, and missing-component misses.
 
-`tests/lazy_commit.rs` covers `lazy_commit()`: it applies queued
-`set_component`/`unset_component` commands the same as `commit()`, but
-with nothing queued it skips system re-testing entirely and leaves the
-active-system set untouched, whereas a plain `commit()` in the same spot
-would re-test and could flip a system's active state.
+`tests/system_laziness.rs` covers `System::is_lazy()`: it defaults to
+`true`; a lazy system's `test()` is skipped by `commit()` on a call with
+nothing queued (its active-system entry is left untouched), while a
+system overriding `is_lazy()` to `false` is re-tested every `commit()`
+regardless; and `commit()` still applies queued components either way.
 
 `tests/all_refreshed_system.rs` and `tests/any_refreshed_system.rs` cover
 `AllRefreshedSystem` and `AnyRefreshedSystem` respectively: single- and
