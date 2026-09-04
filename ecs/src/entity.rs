@@ -99,6 +99,11 @@ impl Entity {
         self
     }
 
+    pub fn reset(&mut self) -> &mut Self {
+        self.commands.clear();
+        self.commit()
+    }
+
     pub fn is_system_active<T: System>(&self) -> bool {
         self.active_systems.contains(&TypeId::of::<T>())
     }
