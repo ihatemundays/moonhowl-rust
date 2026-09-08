@@ -27,15 +27,51 @@ type ComponentMap = HashMap<TypeId, Box<dyn Component>, BuildHasherDefault<FxHas
 type SystemMap = HashMap<TypeId, Box<dyn System>, BuildHasherDefault<FxHasher>>;
 type ActiveSystemSet = HashSet<TypeId, BuildHasherDefault<FxHasher>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandOrder {
+    Low,
+    Pos(usize),
+    High,
+}
+
+impl CommandOrder {
+    fn rank(self) -> (u8, usize) {
+        match self {
+            CommandOrder::Low => (0, 0),
+            CommandOrder::Pos(pos) => (1, pos),
+            CommandOrder::High => (2, 0),
+        }
+    }
+}
+
 enum ComponentCommand {
-    Set(TypeId, Box<dyn Component>),
+    Set(TypeId, Box<dyn Component>, CommandOrder),
     Unset(TypeId),
+}
+
+impl ComponentCommand {
+    // Unsets always rank above every Set, including an explicit CommandOrder::High,
+    // so a commit never leaves a component re-set after it was meant to be removed.
+    fn rank(&self) -> (u8, usize) {
+        match self {
+            ComponentCommand::Set(_, _, order) => order.rank(),
+            ComponentCommand::Unset(_) => (3, 0),
+        }
+    }
+
+    fn type_id(&self) -> TypeId {
+        match self {
+            ComponentCommand::Set(id, ..) => *id,
+            ComponentCommand::Unset(id) => *id,
+        }
+    }
 }
 
 pub struct Entity {
     components: ComponentMap,
     systems: SystemMap,
     commands: Vec<ComponentCommand>,
+    next_pos: usize,
     active_systems: ActiveSystemSet,
 }
 
@@ -45,6 +81,7 @@ impl Entity {
             components: ComponentMap::default(),
             systems: SystemMap::default(),
             commands: Vec::new(),
+            next_pos: 0,
             active_systems: ActiveSystemSet::default(),
         }
     }
@@ -60,8 +97,15 @@ impl Entity {
     }
 
     pub fn set_component<T: Component>(&mut self, component: T) -> &mut Self {
+        let order = self.next_order();
         self.commands
-            .push(ComponentCommand::Set(TypeId::of::<T>(), Box::new(component)));
+            .push(ComponentCommand::Set(TypeId::of::<T>(), Box::new(component), order));
+        self
+    }
+
+    pub fn set_component_with_order<T: Component>(&mut self, component: T, order: CommandOrder) -> &mut Self {
+        self.commands
+            .push(ComponentCommand::Set(TypeId::of::<T>(), Box::new(component), order));
         self
     }
 
@@ -70,12 +114,39 @@ impl Entity {
         self
     }
 
+    fn next_order(&mut self) -> CommandOrder {
+        let pos = self.next_pos;
+        self.next_pos += 1;
+        CommandOrder::Pos(pos)
+    }
+
+    // Commands are already sorted by rank at this point, so for any TypeId only its
+    // last command actually reaches the component map — every earlier one for that
+    // same TypeId (redundant Sets, or Sets shadowed by an Unset) is a dead write.
+    fn keep_last_command_per_component(&mut self) {
+        let mut seen = HashSet::with_hasher(BuildHasherDefault::<FxHasher>::default());
+        let mut kept: Vec<ComponentCommand> = Vec::with_capacity(self.commands.len());
+
+        for command in self.commands.drain(..).rev() {
+            if seen.insert(command.type_id()) {
+                kept.push(command);
+            }
+        }
+
+        kept.reverse();
+        self.commands = kept;
+    }
+
     pub fn commit(&mut self) -> &mut Self {
         let nothing_changed = self.commands.is_empty();
+        self.next_pos = 0;
+
+        self.commands.sort_by_key(|command| command.rank());
+        self.keep_last_command_per_component();
 
         for command in self.commands.drain(..) {
             match command {
-                ComponentCommand::Set(id, component) => {
+                ComponentCommand::Set(id, component, _) => {
                     self.components.insert(id, component);
                 }
                 ComponentCommand::Unset(id) => {

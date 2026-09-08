@@ -1,4 +1,4 @@
-use ecs::{Component, Entity};
+use ecs::{CommandOrder, Component, Entity};
 
 struct Position {
     x: f32,
@@ -343,4 +343,76 @@ fn duplicate_type_tuple_archetype_reads_the_same_component_twice() {
         .map(|(a, b)| a.x + b.y);
 
     assert_eq!(sum, Some(7.0));
+}
+
+#[test]
+fn explicit_high_order_applies_last_regardless_of_queue_position() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("high"), CommandOrder::High)
+        .set_component(Tag("default"))
+        .set_component_with_order(Tag("low"), CommandOrder::Low)
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("high"));
+}
+
+#[test]
+fn explicit_pos_values_sort_numerically_independent_of_queue_order() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("second"), CommandOrder::Pos(5))
+        .set_component_with_order(Tag("first"), CommandOrder::Pos(1))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("second"));
+}
+
+#[test]
+fn default_positions_keep_increasing_after_a_low_order_command() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("low"), CommandOrder::Low)
+        .set_component(Tag("default1"))
+        .set_component(Tag("default2"))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("default2"));
+}
+
+#[test]
+fn redundant_sets_of_the_same_component_collapse_to_the_last_one() {
+    let mut entity = Entity::new();
+    entity
+        .set_component(Tag("a"))
+        .set_component_with_order(Tag("b"), CommandOrder::Low)
+        .set_component_with_order(Tag("c"), CommandOrder::High)
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("c"));
+}
+
+#[test]
+fn an_unset_drops_every_pending_set_of_the_same_component() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("high"), CommandOrder::High)
+        .set_component(Tag("default"))
+        .unset_component::<Tag>()
+        .commit();
+
+    assert!(!entity.has_component::<Tag>());
+}
+
+#[test]
+fn unset_always_wins_over_a_same_commit_high_order_set() {
+    let mut entity = Entity::new();
+    entity.set_component(Tag("initial")).commit();
+
+    entity
+        .set_component_with_order(Tag("resurrected"), CommandOrder::High)
+        .unset_component::<Tag>()
+        .commit();
+
+    assert!(!entity.has_component::<Tag>());
 }

@@ -29,12 +29,33 @@ to it.
 ### The command queue
 
 `set_component`/`unset_component` don't touch the live component set
-directly — they queue a command, applied in issue order by `commit()`. This
-is the *only* way the live component set changes: there is no `&mut T`
-accessor anywhere in the API, so nothing can write to a component outside of
-`commit()`. To change a component's value, build the new value and
-`set_component` it — `commit()` replaces the old one. See "Why there's no
-`&mut T`" below.
+directly — they queue a command, applied by `commit()`. This is the *only*
+way the live component set changes: there is no `&mut T` accessor anywhere
+in the API, so nothing can write to a component outside of `commit()`. To
+change a component's value, build the new value and `set_component` it —
+`commit()` replaces the old one. See "Why there's no `&mut T`" below.
+
+By default, queued commands apply in the order they were issued —
+`set_component` assigns each one an increasing `CommandOrder::Pos(x)`
+behind the scenes. `set_component_with_order` overrides this for a single
+command with an explicit `CommandOrder`:
+
+- `CommandOrder::Low` — applies before every default- or `Pos`-ordered
+  command in this commit.
+- `CommandOrder::Pos(x)` — sorts among other `Pos` values by `x`.
+- `CommandOrder::High` — applies after every `Low`- or `Pos`-ordered
+  command.
+
+`unset_component` ignores `CommandOrder` entirely and always applies last —
+after every `Set`, including an explicit `High` one. So within a single
+commit, once a component is unset it stays unset, no matter what order any
+matching `set_component`/`set_component_with_order` calls were queued in.
+
+Before applying anything, `commit()` also collapses the queue down to one
+command per component type — for a given `TypeId`, only its last command
+after ranking has any effect (an earlier `Set` shadowed by a later one, or
+by an `Unset`, is a dead write), so redundant commands are dropped instead
+of hitting the component map.
 
 `commit()` also re-evaluates bound systems against the (now up to date)
 component set: for each system where `test()` is actually called, the
@@ -104,14 +125,24 @@ fn main() {
 - `get_component::<T>() -> Option<&T>` — read-only; there is no `_mut`
   counterpart, by design (see below).
 - `set_component::<T>(value) -> &mut Self` — queue an insert-or-overwrite
-  command; chainable. Not visible to reads until `commit()`.
+  command at the next default `CommandOrder::Pos`; chainable. Not visible to
+  reads until `commit()`.
+- `set_component_with_order::<T>(value, order: CommandOrder) -> &mut Self` —
+  like `set_component`, but with an explicit `CommandOrder` (`Low`, `Pos(x)`,
+  or `High`) instead of the next default position; chainable.
 - `unset_component::<T>() -> &mut Self` — queue a remove command; chainable.
-  Not visible to reads until `commit()`.
-- `commit() -> &mut Self` — drain queued `set_component`/`unset_component`
-  commands and apply them to the live component set, in the order they were
-  issued, then re-test each bound system whose `is_lazy()` is `false`, or
-  whose `is_lazy()` is `true` but something was actually queued this call,
-  to refresh the active-system set; chainable.
+  Always applies after every `Set` in the same commit, regardless of any
+  `CommandOrder`. Not visible to reads until `commit()`.
+- `commit() -> &mut Self` — sort queued commands by `CommandOrder` (`Unset`
+  last), drop every command shadowed by a later one for the same component
+  type, apply what's left to the live component set, then re-test each
+  bound system whose `is_lazy()` is `false`, or whose `is_lazy()` is `true`
+  but something was actually queued this call, to refresh the
+  active-system set; chainable.
+- `reset() -> &mut Self` — discard any queued, not-yet-committed commands
+  without applying them, then `commit()` as if nothing were queued: lazy
+  systems are skipped (as always for an empty queue), non-lazy systems are
+  still re-tested; chainable.
 
 ### Archetypes
 
@@ -310,7 +341,9 @@ cargo test -p ecs
 
 `tests/archetype.rs` covers single- and multi-component archetypes (1–6
 components), reads, deferred/ordered command application, overwrites via
-`set_component`, and missing-component misses.
+`set_component`, missing-component misses, `CommandOrder` (`Low`/`Pos`/`High`
+ordering, `Unset` always winning over a same-commit `Set` including `High`),
+and collapsing redundant commands down to the last one per component.
 
 `tests/system_laziness.rs` covers `System::is_lazy()`: it defaults to
 `true`; a lazy system's `test()` is skipped by `commit()` on a call with
