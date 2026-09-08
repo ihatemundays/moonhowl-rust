@@ -100,33 +100,34 @@ impl Entity {
     }
 
     pub fn set_component<T: Component>(&mut self, component: T) -> &mut Self {
-        self.queue(TypeId::of::<T>(), ComponentCommand::Set(Box::new(component), CommandOrder::Medium))
+        self.set_component_with_order(component, CommandOrder::Medium)
     }
 
     pub fn set_component_with_order<T: Component>(&mut self, component: T, order: CommandOrder) -> &mut Self {
-        self.queue(TypeId::of::<T>(), ComponentCommand::Set(Box::new(component), order))
+        self.queue(TypeId::of::<T>(), order, || ComponentCommand::Set(Box::new(component), order))
     }
 
     pub fn unset_component<T: Component>(&mut self) -> &mut Self {
-        self.queue(TypeId::of::<T>(), ComponentCommand::Unset(CommandOrder::Medium))
+        self.unset_component_with_order::<T>(CommandOrder::Medium)
     }
 
     pub fn unset_component_with_order<T: Component>(&mut self, order: CommandOrder) -> &mut Self {
-        self.queue(TypeId::of::<T>(), ComponentCommand::Unset(order))
+        self.queue(TypeId::of::<T>(), order, || ComponentCommand::Unset(order))
     }
 
     // At most one command per component type is ever queued: a new command for a
-    // type that's already pending is ranked against the pending one in place, and
-    // only the higher-ranked of the two survives (ties favor the new command).
-    fn queue(&mut self, id: TypeId, command: ComponentCommand) -> &mut Self {
+    // type that's already pending is ranked against the pending one before `build`
+    // ever runs, so a `Set` that loses the rank check never pays for its `Box`
+    // allocation — only a command that will actually be kept gets built at all.
+    fn queue(&mut self, id: TypeId, order: CommandOrder, build: impl FnOnce() -> ComponentCommand) -> &mut Self {
         match self.commands.entry(id) {
             Entry::Occupied(mut occupied) => {
-                if command.rank() >= occupied.get().rank() {
-                    occupied.insert(command);
+                if order.rank() >= occupied.get().rank() {
+                    occupied.insert(build());
                 }
             }
             Entry::Vacant(vacant) => {
-                vacant.insert(command);
+                vacant.insert(build());
             }
         }
         self

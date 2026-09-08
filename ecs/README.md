@@ -90,6 +90,13 @@ clear-then-rebuild step that shouldn't accidentally erase a fresh value.
 Since at most one command per component type is ever queued at a time, the
 component map only ever receives that one winning command per type when
 `commit()` runs — there's no separate dedup pass needed at commit time.
+Resolving a new command against a pending one is a single `FxHasher`-backed
+hashmap lookup (see "Performance" below) plus a comparison of two small
+integers — cost independent of how many other commands happen to be
+queued. For `set_component`/`set_component_with_order` specifically, the
+new value is only boxed once the rank check says it'll actually be kept: a
+`set_component` call that loses to a higher-ranked pending command for the
+same type never pays for the heap allocation at all.
 
 `commit()` also re-evaluates bound systems against the (now up to date)
 component set: for each system where `test()` is actually called, the
