@@ -369,7 +369,19 @@ fn explicit_pos_values_sort_numerically_independent_of_queue_order() {
 }
 
 #[test]
-fn default_positions_keep_increasing_after_a_low_order_command() {
+fn explicit_pos_outranks_every_default_seq_ordered_command() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("pos"), CommandOrder::Pos(0))
+        .set_component(Tag("default_a"))
+        .set_component(Tag("default_b"))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("pos"));
+}
+
+#[test]
+fn a_later_default_set_still_wins_after_a_low_order_command() {
     let mut entity = Entity::new();
     entity
         .set_component_with_order(Tag("low"), CommandOrder::Low)
@@ -393,7 +405,7 @@ fn redundant_sets_of_the_same_component_collapse_to_the_last_one() {
 }
 
 #[test]
-fn an_unset_drops_every_pending_set_of_the_same_component() {
+fn a_default_order_unset_does_not_beat_an_explicit_high_order_set() {
     let mut entity = Entity::new();
     entity
         .set_component_with_order(Tag("high"), CommandOrder::High)
@@ -401,17 +413,48 @@ fn an_unset_drops_every_pending_set_of_the_same_component() {
         .unset_component::<Tag>()
         .commit();
 
-    assert!(!entity.has_component::<Tag>());
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("high"));
 }
 
 #[test]
-fn unset_always_wins_over_a_same_commit_high_order_set() {
+fn a_high_order_unset_still_beats_a_same_commit_high_order_set() {
     let mut entity = Entity::new();
     entity.set_component(Tag("initial")).commit();
 
     entity
         .set_component_with_order(Tag("resurrected"), CommandOrder::High)
-        .unset_component::<Tag>()
+        .unset_component_with_order::<Tag>(CommandOrder::High)
+        .commit();
+
+    assert!(!entity.has_component::<Tag>());
+}
+
+#[test]
+fn a_low_order_unset_lets_a_later_default_set_rebuild_the_component() {
+    let mut entity = Entity::new();
+    entity.set_component(Tag("initial")).commit();
+
+    entity
+        .unset_component_with_order::<Tag>(CommandOrder::Low)
+        .set_component(Tag("rebuilt"))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("rebuilt"));
+}
+
+#[test]
+fn equal_rank_conflicts_resolve_in_place_to_whichever_was_queued_last() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("first"), CommandOrder::Pos(5))
+        .set_component_with_order(Tag("second"), CommandOrder::Pos(5))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("second"));
+
+    entity
+        .set_component_with_order(Tag("set"), CommandOrder::High)
+        .unset_component_with_order::<Tag>(CommandOrder::High)
         .commit();
 
     assert!(!entity.has_component::<Tag>());

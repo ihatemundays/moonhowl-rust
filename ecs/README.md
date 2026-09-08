@@ -35,27 +35,48 @@ in the API, so nothing can write to a component outside of `commit()`. To
 change a component's value, build the new value and `set_component` it —
 `commit()` replaces the old one. See "Why there's no `&mut T`" below.
 
-By default, queued commands apply in the order they were issued —
-`set_component` assigns each one an increasing `CommandOrder::Pos(x)`
-behind the scenes. `set_component_with_order` overrides this for a single
-command with an explicit `CommandOrder`:
+By default, both `set_component` and `unset_component` queue their command
+at `CommandOrder::Seq` — the default tier. `set_component_with_order`/
+`unset_component_with_order` override this for a single command with an
+explicit `CommandOrder`:
 
-- `CommandOrder::Low` — applies before every default- or `Pos`-ordered
-  command in this commit.
-- `CommandOrder::Pos(x)` — sorts among other `Pos` values by `x`.
-- `CommandOrder::High` — applies after every `Low`- or `Pos`-ordered
-  command.
+- `CommandOrder::Low` — applies before everything else in this commit.
+- `CommandOrder::Seq` — the default tier plain `set_component`/
+  `unset_component` calls use. It carries no priority of its own, so two
+  `Seq`-ordered commands queued for the same component type resolve via the
+  same in-place tie-break as any other conflict (see below): the one queued
+  last wins, i.e. plain repeated `set_component` calls behave like ordinary
+  overwrites.
+- `CommandOrder::Pos(x)` — a separate tier above `Seq`, for explicit manual
+  placement: sorts among other `Pos` values by `x`, and always outranks
+  every `Seq`-ordered command regardless of `x`.
+- `CommandOrder::High` — applies after everything else in this commit.
 
-`unset_component` ignores `CommandOrder` entirely and always applies last —
-after every `Set`, including an explicit `High` one. So within a single
-commit, once a component is unset it stays unset, no matter what order any
-matching `set_component`/`set_component_with_order` calls were queued in.
+`Seq` and `Pos` are deliberately different tiers rather than sharing one
+`Pos(usize)` — mixing "just queued normally" with "the position I
+explicitly chose" in the same numeric space made an explicit `Pos(0)`
+collide or interleave unpredictably with plain `set_component` calls.
+Splitting them means an explicit `Pos(x)` always wins over any
+default-ordered command, full stop, no matter what `x` is or how many
+default commands were queued — and `Seq` itself needs no payload at all,
+since ties within a tier already resolve to the newest command.
 
-Before applying anything, `commit()` also collapses the queue down to one
-command per component type — for a given `TypeId`, only its last command
-after ranking has any effect (an earlier `Set` shadowed by a later one, or
-by an `Unset`, is a dead write), so redundant commands are dropped instead
-of hitting the component map.
+`Set` and `Unset` are ranked the same way and compete on equal footing —
+there's no built-in bias toward either. Queuing a second command for a
+component type that already has one pending doesn't grow the queue: the two
+are ranked against each other immediately, and only the higher-ranked one
+survives (a tie keeps whichever was just queued). So a default-ordered
+`unset_component` no longer unconditionally wins against an explicit
+`CommandOrder::High` set queued earlier in the same commit — to guarantee a
+removal survives everything else, unset with `CommandOrder::High` (or
+higher) explicitly via `unset_component_with_order`. Conversely, an
+`unset_component_with_order(CommandOrder::Low)` can be safely overridden by
+a later plain `set_component` in the same commit, which is handy for a
+clear-then-rebuild step that shouldn't accidentally erase a fresh value.
+
+Since at most one command per component type is ever queued at a time, the
+component map only ever receives that one winning command per type when
+`commit()` runs — there's no separate dedup pass needed at commit time.
 
 `commit()` also re-evaluates bound systems against the (now up to date)
 component set: for each system where `test()` is actually called, the
@@ -125,20 +146,24 @@ fn main() {
 - `get_component::<T>() -> Option<&T>` — read-only; there is no `_mut`
   counterpart, by design (see below).
 - `set_component::<T>(value) -> &mut Self` — queue an insert-or-overwrite
-  command at the next default `CommandOrder::Pos`; chainable. Not visible to
+  command at the default `CommandOrder::Seq`; chainable. Not visible to
   reads until `commit()`.
 - `set_component_with_order::<T>(value, order: CommandOrder) -> &mut Self` —
-  like `set_component`, but with an explicit `CommandOrder` (`Low`, `Pos(x)`,
-  or `High`) instead of the next default position; chainable.
-- `unset_component::<T>() -> &mut Self` — queue a remove command; chainable.
-  Always applies after every `Set` in the same commit, regardless of any
-  `CommandOrder`. Not visible to reads until `commit()`.
-- `commit() -> &mut Self` — sort queued commands by `CommandOrder` (`Unset`
-  last), drop every command shadowed by a later one for the same component
-  type, apply what's left to the live component set, then re-test each
-  bound system whose `is_lazy()` is `false`, or whose `is_lazy()` is `true`
-  but something was actually queued this call, to refresh the
-  active-system set; chainable.
+  like `set_component`, but with an explicit `CommandOrder` (`Low`, `Seq`,
+  `Pos(x)`, or `High`) instead of the default `Seq`; chainable.
+- `unset_component::<T>() -> &mut Self` — queue a remove command at the
+  default `CommandOrder::Seq`, same as `set_component`; chainable. Not
+  visible to reads until `commit()`.
+- `unset_component_with_order::<T>(order: CommandOrder) -> &mut Self` — like
+  `unset_component`, but with an explicit `CommandOrder`; chainable.
+- `commit() -> &mut Self` — apply the pending command for every component
+  type that has one to the live component set, then re-test each bound
+  system whose `is_lazy()` is `false`, or whose `is_lazy()` is `true` but
+  something was actually queued this call, to refresh the active-system
+  set; chainable. Queuing a second command for a type that already has one
+  pending ranks the two in place and keeps only the higher-ranked one (ties
+  favor the newer command), so there's never more than one command per type
+  left to apply.
 - `reset() -> &mut Self` — discard any queued, not-yet-committed commands
   without applying them, then `commit()` as if nothing were queued: lazy
   systems are skipped (as always for an empty queue), non-lazy systems are
@@ -341,9 +366,11 @@ cargo test -p ecs
 
 `tests/archetype.rs` covers single- and multi-component archetypes (1–6
 components), reads, deferred/ordered command application, overwrites via
-`set_component`, missing-component misses, `CommandOrder` (`Low`/`Pos`/`High`
-ordering, `Unset` always winning over a same-commit `Set` including `High`),
-and collapsing redundant commands down to the last one per component.
+`set_component`, missing-component misses, `CommandOrder` (`Low`/`Seq`/`Pos`/
+`High` ordering for both `Set` and `Unset`, `Pos` always outranking `Seq`
+regardless of numeric value, in-place rank resolution when a second
+command for the same component is queued, and tie-breaking toward the
+newer command).
 
 `tests/system_laziness.rs` covers `System::is_lazy()`: it defaults to
 `true`; a lazy system's `test()` is skipped by `commit()` on a call with
