@@ -358,26 +358,70 @@ fn explicit_high_order_applies_last_regardless_of_queue_position() {
 }
 
 #[test]
-fn explicit_pos_values_sort_numerically_independent_of_queue_order() {
+fn a_larger_higher_offset_outranks_a_smaller_one() {
     let mut entity = Entity::new();
     entity
-        .set_component_with_order(Tag("second"), CommandOrder::Pos(5))
-        .set_component_with_order(Tag("first"), CommandOrder::Pos(1))
+        .set_component_with_order(Tag("closer_to_high"), CommandOrder::Higher(1))
+        .set_component_with_order(Tag("closer_to_highest"), CommandOrder::Higher(5))
         .commit();
 
-    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("second"));
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("closer_to_highest"));
 }
 
 #[test]
-fn explicit_pos_outranks_every_default_seq_ordered_command() {
+fn a_smaller_lower_offset_outranks_a_larger_one() {
     let mut entity = Entity::new();
     entity
-        .set_component_with_order(Tag("pos"), CommandOrder::Pos(0))
+        .set_component_with_order(Tag("closer_to_low"), CommandOrder::Lower(1))
+        .set_component_with_order(Tag("closer_to_lowest"), CommandOrder::Lower(5))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("closer_to_low"));
+}
+
+#[test]
+fn explicit_higher_outranks_every_default_medium_ordered_command() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("higher"), CommandOrder::Higher(0))
         .set_component(Tag("default_a"))
         .set_component(Tag("default_b"))
         .commit();
 
-    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("pos"));
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("higher"));
+}
+
+#[test]
+fn explicit_lower_loses_to_every_default_medium_ordered_command() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("lower"), CommandOrder::Lower(1000))
+        .set_component(Tag("default"))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("default"));
+}
+
+#[test]
+fn highest_outranks_an_explicit_higher_order_set() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("higher"), CommandOrder::Higher(1000))
+        .set_component_with_order(Tag("highest"), CommandOrder::Highest)
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("highest"));
+}
+
+#[test]
+fn an_explicit_lower_order_set_outranks_lowest() {
+    let mut entity = Entity::new();
+    entity
+        .set_component_with_order(Tag("lowest"), CommandOrder::Lowest)
+        .set_component_with_order(Tag("lower"), CommandOrder::Lower(0))
+        .commit();
+
+    assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("lower"));
 }
 
 #[test]
@@ -446,8 +490,8 @@ fn a_low_order_unset_lets_a_later_default_set_rebuild_the_component() {
 fn equal_rank_conflicts_resolve_in_place_to_whichever_was_queued_last() {
     let mut entity = Entity::new();
     entity
-        .set_component_with_order(Tag("first"), CommandOrder::Pos(5))
-        .set_component_with_order(Tag("second"), CommandOrder::Pos(5))
+        .set_component_with_order(Tag("first"), CommandOrder::Higher(5))
+        .set_component_with_order(Tag("second"), CommandOrder::Higher(5))
         .commit();
 
     assert_eq!(entity.get_component::<Tag>().map(|tag| tag.0), Some("second"));

@@ -31,19 +31,29 @@ type CommandMap = HashMap<TypeId, ComponentCommand, BuildHasherDefault<FxHasher>
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandOrder {
+    Lowest,
+    Lower(usize),
     Low,
-    Seq,
-    Pos(usize),
+    Medium,
     High,
+    Higher(usize),
+    Highest,
 }
 
 impl CommandOrder {
+    // Lower(x) and Higher(x) both read as "x steps away from the fixed tier next to
+    // them" — Higher(x) is x steps above High (bigger x applies later, closer to
+    // Highest), so Lower(x) is x steps below Low (bigger x applies earlier, closer
+    // to Lowest); the two variants therefore rank oppositely against their payload.
     fn rank(self) -> (u8, usize) {
         match self {
-            CommandOrder::Low => (0, 0),
-            CommandOrder::Seq => (1, 0),
-            CommandOrder::Pos(pos) => (2, pos),
-            CommandOrder::High => (3, 0),
+            CommandOrder::Lowest => (0, 0),
+            CommandOrder::Lower(pos) => (1, usize::MAX - pos),
+            CommandOrder::Low => (2, 0),
+            CommandOrder::Medium => (3, 0),
+            CommandOrder::High => (4, 0),
+            CommandOrder::Higher(pos) => (5, pos),
+            CommandOrder::Highest => (6, 0),
         }
     }
 }
@@ -90,7 +100,7 @@ impl Entity {
     }
 
     pub fn set_component<T: Component>(&mut self, component: T) -> &mut Self {
-        self.queue(TypeId::of::<T>(), ComponentCommand::Set(Box::new(component), CommandOrder::Seq))
+        self.queue(TypeId::of::<T>(), ComponentCommand::Set(Box::new(component), CommandOrder::Medium))
     }
 
     pub fn set_component_with_order<T: Component>(&mut self, component: T, order: CommandOrder) -> &mut Self {
@@ -98,7 +108,7 @@ impl Entity {
     }
 
     pub fn unset_component<T: Component>(&mut self) -> &mut Self {
-        self.queue(TypeId::of::<T>(), ComponentCommand::Unset(CommandOrder::Seq))
+        self.queue(TypeId::of::<T>(), ComponentCommand::Unset(CommandOrder::Medium))
     }
 
     pub fn unset_component_with_order<T: Component>(&mut self, order: CommandOrder) -> &mut Self {

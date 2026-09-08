@@ -36,30 +36,43 @@ change a component's value, build the new value and `set_component` it —
 `commit()` replaces the old one. See "Why there's no `&mut T`" below.
 
 By default, both `set_component` and `unset_component` queue their command
-at `CommandOrder::Seq` — the default tier. `set_component_with_order`/
+at `CommandOrder::Medium` — the tier exactly in the middle. `set_component_with_order`/
 `unset_component_with_order` override this for a single command with an
-explicit `CommandOrder`:
+explicit `CommandOrder`, ranked low to high:
 
-- `CommandOrder::Low` — applies before everything else in this commit.
-- `CommandOrder::Seq` — the default tier plain `set_component`/
+- `CommandOrder::Lowest` — applies before everything else in this commit,
+  full stop; nothing can be queued below it.
+- `CommandOrder::Lower(x)` — a tier for explicit manual placement below
+  `Low`, read as "`x` steps below `Low`": a *bigger* `x` sinks further down,
+  applying *earlier*, closer to `Lowest`. Always outranks `Lowest`
+  regardless of `x`.
+- `CommandOrder::Low` — a fixed tier below `Medium`.
+- `CommandOrder::Medium` — the default tier plain `set_component`/
   `unset_component` calls use. It carries no priority of its own, so two
-  `Seq`-ordered commands queued for the same component type resolve via the
-  same in-place tie-break as any other conflict (see below): the one queued
-  last wins, i.e. plain repeated `set_component` calls behave like ordinary
-  overwrites.
-- `CommandOrder::Pos(x)` — a separate tier above `Seq`, for explicit manual
-  placement: sorts among other `Pos` values by `x`, and always outranks
-  every `Seq`-ordered command regardless of `x`.
-- `CommandOrder::High` — applies after everything else in this commit.
+  `Medium`-ordered commands queued for the same component type resolve via
+  the same in-place tie-break as any other conflict (see below): the one
+  queued last wins, i.e. plain repeated `set_component` calls behave like
+  ordinary overwrites.
+- `CommandOrder::High` — a fixed tier above `Medium`.
+- `CommandOrder::Higher(x)` — a tier for explicit manual placement above
+  `High`, read as "`x` steps above `High`": a *bigger* `x` climbs further
+  up, applying *later*, closer to `Highest`. Always outranks `High`
+  regardless of `x`.
+- `CommandOrder::Highest` — applies after everything else in this commit,
+  full stop; nothing can be queued above it.
 
-`Seq` and `Pos` are deliberately different tiers rather than sharing one
-`Pos(usize)` — mixing "just queued normally" with "the position I
-explicitly chose" in the same numeric space made an explicit `Pos(0)`
-collide or interleave unpredictably with plain `set_component` calls.
-Splitting them means an explicit `Pos(x)` always wins over any
-default-ordered command, full stop, no matter what `x` is or how many
-default commands were queued — and `Seq` itself needs no payload at all,
-since ties within a tier already resolve to the newest command.
+`Lower(x)` and `Higher(x)` rank *oppositely* against their own payload —
+bigger `x` means earlier for `Lower`, later for `Higher` — because each
+reads as an offset from the fixed tier it sits next to, in the direction
+its name points. They're also deliberately separate from the fixed
+`Low`/`Medium`/`High` tiers rather than one shared `Pos(usize)` — mixing
+"just queued normally" with "the position I explicitly chose" in the same
+numeric space made an explicit position collide or interleave
+unpredictably with plain `set_component` calls. Splitting them means an
+explicit `Lower`/`Higher` value always wins over the fixed tier it sits
+next to, full stop, no matter what `x` is — and `Medium` (like
+`Low`/`High`/`Lowest`/`Highest`) needs no payload at all, since ties
+within a tier already resolve to the newest command.
 
 `Set` and `Unset` are ranked the same way and compete on equal footing —
 there's no built-in bias toward either. Queuing a second command for a
@@ -146,13 +159,14 @@ fn main() {
 - `get_component::<T>() -> Option<&T>` — read-only; there is no `_mut`
   counterpart, by design (see below).
 - `set_component::<T>(value) -> &mut Self` — queue an insert-or-overwrite
-  command at the default `CommandOrder::Seq`; chainable. Not visible to
+  command at the default `CommandOrder::Medium`; chainable. Not visible to
   reads until `commit()`.
 - `set_component_with_order::<T>(value, order: CommandOrder) -> &mut Self` —
-  like `set_component`, but with an explicit `CommandOrder` (`Low`, `Seq`,
-  `Pos(x)`, or `High`) instead of the default `Seq`; chainable.
+  like `set_component`, but with an explicit `CommandOrder` (`Lowest`,
+  `Lower(x)`, `Low`, `Medium`, `High`, `Higher(x)`, or `Highest`) instead of
+  the default `Medium`; chainable.
 - `unset_component::<T>() -> &mut Self` — queue a remove command at the
-  default `CommandOrder::Seq`, same as `set_component`; chainable. Not
+  default `CommandOrder::Medium`, same as `set_component`; chainable. Not
   visible to reads until `commit()`.
 - `unset_component_with_order::<T>(order: CommandOrder) -> &mut Self` — like
   `unset_component`, but with an explicit `CommandOrder`; chainable.
@@ -366,9 +380,12 @@ cargo test -p ecs
 
 `tests/archetype.rs` covers single- and multi-component archetypes (1–6
 components), reads, deferred/ordered command application, overwrites via
-`set_component`, missing-component misses, `CommandOrder` (`Low`/`Seq`/`Pos`/
-`High` ordering for both `Set` and `Unset`, `Pos` always outranking `Seq`
-regardless of numeric value, in-place rank resolution when a second
+`set_component`, missing-component misses, `CommandOrder`'s seven tiers
+(`Lowest`/`Lower(x)`/`Low`/`Medium`/`High`/`Higher(x)`/`Highest`) ordering
+for both `Set` and `Unset`, `Lower`/`Higher` always outranking the fixed
+tier they sit next to regardless of numeric value, `Lower` and `Higher`
+ranking oppositely against their own payload, in-place rank resolution
+when a second
 command for the same component is queued, and tie-breaking toward the
 newer command).
 
