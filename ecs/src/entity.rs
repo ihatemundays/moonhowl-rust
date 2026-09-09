@@ -116,9 +116,9 @@ impl Entity {
     }
 
     // At most one command per component type is ever queued: a new command for a
-    // type that's already pending is ranked against the pending one before `build`
-    // ever runs, so a `Set` that loses the rank check never pays for its `Box`
-    // allocation — only a command that will actually be kept gets built at all.
+    // type that's already pending is ranked against the pending one before a build
+    // ever runs, so a component that loses the rank check never allocates its Box
+    // allocation.
     fn queue(&mut self, id: TypeId, order: CommandOrder, build: impl FnOnce() -> ComponentCommand) -> &mut Self {
         match self.commands.entry(id) {
             Entry::Occupied(mut occupied) => {
